@@ -12,7 +12,7 @@ import {
   Copy,
   Check,
 } from 'lucide-react';
-import { HunterState, Puzzle, formatLargeNumber, formatKeysSpeed } from '../types';
+import { HunterState, Puzzle, formatLargeNumber, formatCompactKeys, formatKeysSpeed } from '../types';
 
 interface PuzzleCardProps {
   puzzle: Puzzle;
@@ -207,6 +207,12 @@ export const PuzzleCard: React.FC<PuzzleCardProps> = ({ puzzle, hunter, destinat
               </div>
               <div className="text-sm font-bold text-white font-mono">
                 {hunter.windows_scanned.toLocaleString()}
+              </div>
+              <div
+                className="text-[10px] text-blue-400 font-mono mt-0.5 truncate"
+                title={`Total Kunci: ${(hunter.windows_scanned * Math.pow(2, puzzle.pubkey_hex && puzzle.pubkey_hex.length === 66 ? windowBits : Math.min(windowBits, 18))).toLocaleString()} keys`}
+              >
+                ~{formatCompactKeys(hunter.windows_scanned * Math.pow(2, puzzle.pubkey_hex && puzzle.pubkey_hex.length === 66 ? windowBits : Math.min(windowBits, 18)))} keys
               </div>
             </div>
 

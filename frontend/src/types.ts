@@ -61,11 +61,28 @@ export interface ScannedWindow {
 
 export function formatLargeNumber(n: number): string {
   if (!n || n <= 0) return '0';
+  if (n >= 1_000_000_000_000) {
+    return `${(n / 1_000_000_000_000).toFixed(2)} Triliun`;
+  }
   if (n >= 1_000_000_000) {
-    return `${(n / 1_000_000_000).toFixed(2)} Miliar (${Math.round(n).toLocaleString()})`;
+    return `${(n / 1_000_000_000).toFixed(2)} Miliar`;
   }
   if (n >= 1_000_000) {
-    return `${(n / 1_000_000).toFixed(1)} Juta (${Math.round(n).toLocaleString()})`;
+    return `${(n / 1_000_000).toFixed(1)} Juta`;
+  }
+  return Math.round(n).toLocaleString();
+}
+
+export function formatCompactKeys(n: number): string {
+  if (!n || n <= 0) return '0';
+  if (n >= 1_000_000_000_000) {
+    return `${(n / 1_000_000_000_000).toFixed(2)} Triliun`;
+  }
+  if (n >= 1_000_000_000) {
+    return `${(n / 1_000_000_000).toFixed(2)} Miliar`;
+  }
+  if (n >= 1_000_000) {
+    return `${(n / 1_000_000).toFixed(1)} Juta`;
   }
   return Math.round(n).toLocaleString();
 }

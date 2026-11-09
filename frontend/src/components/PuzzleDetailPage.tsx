@@ -17,7 +17,7 @@ import {
   ShieldCheck,
   RotateCw,
 } from 'lucide-react';
-import { HunterState, Puzzle, ScannedWindow, formatLargeNumber, formatKeysSpeed } from '../types';
+import { HunterState, Puzzle, ScannedWindow, formatLargeNumber, formatCompactKeys, formatKeysSpeed } from '../types';
 
 interface PuzzleDetailPageProps {
   puzzle: Puzzle;
@@ -45,6 +45,13 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
 
   const isRunning = hunter?.status === 'Running';
   const isSolved = puzzle.is_solved || hunter?.status === 'SolvedByUs' || hunter?.status === 'SolvedByOther';
+
+  // Perhitungan total keys dari perkalian block / window
+  const isPubkeyExposed = Boolean(puzzle.pubkey_hex && puzzle.pubkey_hex.trim().length === 66);
+  const effectiveBits = isPubkeyExposed ? windowBits : Math.min(windowBits, 18);
+  const keysPerBlock = Math.pow(2, effectiveBits);
+  const windowsCount = hunter?.windows_scanned || windows.length;
+  const totalHistoricalKeys = windowsCount * keysPerBlock;
 
   // Fetch riwayat scanned windows dari PostgreSQL
   const fetchScannedWindows = async () => {
@@ -250,12 +257,21 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
         </div>
 
         <div className="p-4 bg-slate-900/60 border border-slate-800 rounded-2xl">
-          <div className="flex items-center gap-2 text-slate-400 text-xs mb-1">
-            <Layers className="w-4 h-4 text-blue-400" />
-            <span>Windows (Postgres)</span>
+          <div className="flex items-center justify-between text-slate-400 text-xs mb-1">
+            <div className="flex items-center gap-2">
+              <Layers className="w-4 h-4 text-blue-400" />
+              <span>Windows (Postgres)</span>
+            </div>
           </div>
           <div className="text-xl font-extrabold text-white font-mono">
-            {hunter?.windows_scanned || windows.length}
+            {windowsCount.toLocaleString()}
+          </div>
+          <div
+            className="text-xs text-blue-400 font-mono mt-1 flex items-center gap-1.5"
+            title={`Total Kunci: ${totalHistoricalKeys.toLocaleString()} (${windowsCount.toLocaleString()} window × 2^${effectiveBits} keys)`}
+          >
+            <span className="text-slate-400 text-[11px]">Total Kunci:</span>
+            <span className="font-bold">~{formatCompactKeys(totalHistoricalKeys)}</span>
           </div>
         </div>
 
@@ -264,7 +280,10 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
             <Cpu className="w-4 h-4 text-purple-400" />
             <span>Total Kunci Sesi Ini</span>
           </div>
-          <div className="text-xl font-extrabold text-white font-mono">
+          <div
+            className="text-xl font-extrabold text-white font-mono"
+            title={hunter?.total_keys_checked ? `${hunter.total_keys_checked.toLocaleString()} keys` : '0 keys'}
+          >
             {hunter?.total_keys_checked ? formatLargeNumber(hunter.total_keys_checked) : '0'}
           </div>
         </div>

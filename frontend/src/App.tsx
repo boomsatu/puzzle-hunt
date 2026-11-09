@@ -35,8 +35,24 @@ export const App: React.FC = () => {
   const [wsConnected, setWsConnected] = useState(false);
   const [lastRefreshed, setLastRefreshed] = useState<Date>(new Date());
 
-  // Alamat tujuan auto-transfer permanen (Terkunci demi keamanan)
-  const destinationAddress = 'bc1q8c0uc752amr7v4amswn5vhes37a6ffy4ral6ek';
+  // Alamat tujuan auto-transfer permanen (Terkunci demi keamanan, sinkron dari .env via /api/config)
+  const [destinationAddress, setDestinationAddress] = useState(
+    'bc1qz08nklntedluzzr9w0g3qhxrkvytayentqdshc'
+  );
+
+  const fetchConfig = async () => {
+    try {
+      const res = await fetch('/api/config');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.destination_address) {
+          setDestinationAddress(data.destination_address);
+        }
+      }
+    } catch {
+      // Fallback tetap menggunakan default state
+    }
+  };
 
   // Ambil data puzzle dari PostgreSQL API
   const fetchPuzzles = async () => {
@@ -85,6 +101,7 @@ export const App: React.FC = () => {
   };
 
   const refreshAll = () => {
+    fetchConfig();
     fetchPuzzles();
     fetchHuntersStatus();
     fetchFoundKeys();

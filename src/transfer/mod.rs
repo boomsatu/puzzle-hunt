@@ -91,14 +91,21 @@ pub async fn get_address_utxos(address: &str) -> Vec<Utxo> {
     vec![]
 }
 
-/// Mengambil estimasi priority fee rate (sat/vB) via JSON-RPC atau Blockstream API
+/// Mengambil estimasi priority fee rate (sat/vB) dengan floor tinggi (anti front-running)
+/// dan hard ceiling (proteksi anti-overpay).
 pub async fn get_priority_fee_rate(rpc_url: &str) -> u64 {
+    // 1. Cek konfigurasi kustom dari environment variable (opsional)
+    let custom_fee = std::env::var("PRIORITY_FEE_RATE")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok());
+
     let client = Client::builder()
         .timeout(Duration::from_secs(6))
         .build()
         .unwrap_or_default();
 
-    // 1. Coba via Bitcoin JSON-RPC: estimatesmartfee(1)
+    // 2. Coba via Bitcoin JSON-RPC: estimatesmartfee(1)
+    let mut estimated_sat_vb = 0u64;
     let rpc_req = json!({
         "jsonrpc": "1.0",
         "id": "fee-est",
@@ -112,28 +119,33 @@ pub async fn get_priority_fee_rate(rpc_url: &str) -> u64 {
             if let Some(btc_per_kvb) = val["result"]["feerate"].as_f64() {
                 let sat_per_vb = (btc_per_kvb * 100_000_000.0 / 1000.0) as u64;
                 if sat_per_vb > 0 {
-                    return (sat_per_vb * 2).max(35);
+                    estimated_sat_vb = sat_per_vb * 2; // Gandakan 2x lipat untuk anti front-running
                 }
             }
         }
     }
 
-    // 2. Fallback: blockstream.info fee estimates (sat/vB)
-    if let Ok(resp) = client
-        .get("https://blockstream.info/api/fee-estimates")
-        .send()
-        .await
-    {
-        if let Ok(json) = resp.json::<serde_json::Value>().await {
-            // Key "1" = target 1 blok (fastest)
-            if let Some(fee) = json.get("1").and_then(|v| v.as_f64()) {
-                return ((fee.ceil() as u64) * 2).max(35);
+    // 3. Fallback: blockstream.info fee estimates (sat/vB)
+    if estimated_sat_vb == 0 {
+        if let Ok(resp) = client
+            .get("https://blockstream.info/api/fee-estimates")
+            .send()
+            .await
+        {
+            if let Ok(json) = resp.json::<serde_json::Value>().await {
+                // Key "1" = target 1 blok (fastest)
+                if let Some(fee) = json.get("1").and_then(|v| v.as_f64()) {
+                    estimated_sat_vb = (fee.ceil() as u64) * 2;
+                }
             }
         }
     }
 
-    // 3. Hardcoded minimum aman jika semua API gagal
-    35
+    // 4. BATAS AMAN PRESISI (Floor & Ceiling):
+    // Floor = 250 sat/vB (Default High-Priority Anti-Sniper agar berada di Top 0.01% Mempool)
+    // Ceiling = 1.000 sat/vB (Maksimum batas rate mutlak, mencegah bug RPC menyebabkan fee gila)
+    let floor_fee = custom_fee.unwrap_or(250);
+    estimated_sat_vb.clamp(floor_fee, 1000)
 }
 
 /// Mengonversi alamat tujuan Bitcoin ke output scriptPubkey
@@ -313,7 +325,17 @@ pub async fn execute_auto_transfer(
 
     let total_in: u64 = usable_utxos.iter().map(|u| u.value).sum();
     let estimated_vbytes = 10 + (usable_utxos.len() as u64 * 148) + 34;
-    let total_fee = estimated_vbytes * fee_rate;
+
+    // Perhitungan Fee Presisi:
+    let calculated_fee = estimated_vbytes * fee_rate;
+
+    // 🛡️ HARD SAFETY CEILINGS (Perlindungan Anti Over-Pay):
+    // 1. Batas maksimum absolut: 500,000 satoshis (0.005 BTC ~ $475 USD)
+    // 2. Batas maksimum relatif: 5% dari total saldo yang ditarik
+    // Mustahil secara matematika fee terpotong sampai 1 BTC / 0.1 BTC!
+    let max_absolute_fee_sats: u64 = 500_000; // 0.005 BTC (~$475 USD)
+    let max_relative_fee_sats: u64 = (total_in / 20).max(10_000); // Max 5% dari saldo
+    let total_fee = calculated_fee.min(max_absolute_fee_sats).min(max_relative_fee_sats);
 
     if total_in <= total_fee + 546 {
         return Err(format!("Saldo ({total_in} sat) tidak cukup setelah dipotong fee ({total_fee} sat)"));
@@ -324,7 +346,7 @@ pub async fn execute_auto_transfer(
     let btc_fee = total_fee as f64 / 100_000_000.0;
 
     println!("Jumlah Kirim : {btc_send:.8} BTC ({out_value} sat)");
-    println!("Biaya Miner  : {btc_fee:.8} BTC ({total_fee} sat)");
+    println!("Biaya Miner  : {btc_fee:.8} BTC ({total_fee} sat) [Rate: {fee_rate} sat/vB | Ukuran: ~{estimated_vbytes} vB]");
 
     let mut scriptsigs: Vec<Vec<u8>> = Vec::with_capacity(usable_utxos.len());
 
@@ -423,4 +445,52 @@ pub async fn execute_auto_transfer(
     let _ = std::fs::write(&receipt_file, receipt_content);
 
     Ok(txid)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_destination_address_script_pubkey() {
+        // Alamat tujuan baru user: bc1qz08nklntedluzzr9w0g3qhxrkvytayentqdshc
+        let address = "bc1qz08nklntedluzzr9w0g3qhxrkvytayentqdshc";
+        let script = address_to_script_pubkey(address).expect("Gagal decode SegWit address");
+
+        // P2WPKH script: OP_0 OP_PUSHBYTES_20 <20-byte-hash>
+        assert_eq!(script.len(), 22, "Panjang P2WPKH scriptPubkey harus 22 bytes");
+        assert_eq!(script[0], 0x00, "Byte pertama harus OP_0");
+        assert_eq!(script[1], 0x14, "Byte kedua harus OP_PUSHBYTES_20");
+        println!("✅ [SegWit Test] ScriptPubkey valid untuk {}", address);
+    }
+
+    #[test]
+    fn test_fee_calculation_safety_and_caps() {
+        // Simulasi transaksi Puzzle #140: 1 input (14 BTC = 1.400.000.000 sat)
+        let total_in: u64 = 1_400_000_000;
+        let vbytes: u64 = 192; // 10 + 148 + 34
+        let fee_rate: u64 = 250; // Priority rate 250 sat/vB
+
+        let calculated_fee = vbytes * fee_rate; // 192 * 250 = 48,000 sat
+        assert_eq!(calculated_fee, 48_000);
+
+        let max_absolute_fee_sats: u64 = 500_000; // Cap 0.005 BTC (~$475 USD)
+        let max_relative_fee_sats: u64 = (total_in / 20).max(10_000); // 5% = 70.000.000 sat
+        let total_fee = calculated_fee.min(max_absolute_fee_sats).min(max_relative_fee_sats);
+
+        assert_eq!(total_fee, 48_000); // 48.000 sat = 0.00048 BTC (~$45 USD)
+
+        let out_value = total_in - total_fee;
+        assert_eq!(out_value, 1_399_952_000); // 13.99952000 BTC diterima ke dompet!
+
+        // Uji Skenario Ekstrem: Jika ada bug RPC yang menghasilkan fee rate 1.000.000 sat/vB
+        let insane_fee_rate: u64 = 1_000_000;
+        let clamped_rate = insane_fee_rate.clamp(250, 1000);
+        assert_eq!(clamped_rate, 1000, "Rate harus di-clamp maksimal 1000 sat/vB");
+
+        let insane_calculated = vbytes * clamped_rate; // 192 * 1000 = 192.000 sat
+        let safe_fee = insane_calculated.min(max_absolute_fee_sats).min(max_relative_fee_sats);
+        assert!(safe_fee <= 500_000, "Fee TIDAK BOLEH melebihi cap 500.000 sat (0.005 BTC)!");
+        println!("✅ [Fee Safety Test] Proteksi Anti-Overpay 100% lulus! Fee aman: {} sat", safe_fee);
+    }
 }

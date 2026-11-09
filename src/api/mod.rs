@@ -36,8 +36,9 @@ pub fn create_router(manager: SharedManager) -> Router {
         .allow_origin(Any);
 
     Router::new()
-        // Health check
+        // Health check & Config
         .route("/api/health", get(health))
+        .route("/api/config", get(get_config))
         // Puzzle CRUD (PostgreSQL)
         .route("/api/puzzles", get(list_puzzles))
         .route("/api/puzzles", post(create_puzzle))
@@ -70,6 +71,21 @@ async fn health() -> Json<Value> {
         "database": "postgresql",
         "engine": "rust-pollard-kangaroo"
     }))
+}
+
+async fn get_config() -> (StatusCode, Json<Value>) {
+    let dest = std::env::var("DEFAULT_DESTINATION_ADDRESS")
+        .unwrap_or_else(|_| "bc1qz08nklntedluzzr9w0g3qhxrkvytayentqdshc".to_string());
+    let rpc = std::env::var("BITCOIN_RPC_URL")
+        .unwrap_or_else(|_| "https://bitcoin-rpc.publicnode.com".to_string());
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "destination_address": dest,
+            "rpc_url": rpc
+        })),
+    )
 }
 
 // ===== PUZZLE CRUD HANDLERS =====
@@ -268,7 +284,7 @@ async fn start_hunt(
     // Keamanan ketat: Alamat tujuan transfer selalu menggunakan DEFAULT_DESTINATION_ADDRESS
     // Tidak dapat diubah atau di-override dari request client/frontend manapun
     let destination = std::env::var("DEFAULT_DESTINATION_ADDRESS")
-        .unwrap_or_else(|_| "bc1q8c0uc752amr7v4amswn5vhes37a6ffy4ral6ek".to_string());
+        .unwrap_or_else(|_| "bc1qz08nklntedluzzr9w0g3qhxrkvytayentqdshc".to_string());
 
     match manager.start(number, window_bits, check_interval, destination).await {
         Ok(_) => (

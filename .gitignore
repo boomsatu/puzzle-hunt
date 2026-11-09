@@ -1,0 +1,28 @@
+# Rust build artifacts
+/target
+**/*.rs.bk
+
+# Sensitive environment variables
+.env
+.env.local
+.env.*.local
+
+# Transfer receipts & private key dumps
+TRANSFER_RECEIPT_*.txt
+*.key
+*.priv
+
+# Node modules & frontend artifacts
+/frontend/node_modules
+/frontend/dist
+/frontend/.vite
+
+# Logs & temp files
+*.log
+*.tmp
+
+# OS & Editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

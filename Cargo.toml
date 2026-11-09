@@ -1,0 +1,61 @@
+[package]
+name = "puzzle-hunt"
+version = "0.1.0"
+edition = "2021"
+description = "Bitcoin Puzzle Hunter — Pollard's Kangaroo Engine with PostgreSQL & REST API"
+
+[[bin]]
+name = "puzzle-hunt"
+path = "src/main.rs"
+
+[dependencies]
+# Elliptic curve secp256k1 — core algoritma Kangaroo
+secp256k1 = { version = "0.29", features = ["rand", "global-context"] }
+
+# Arbitrary precision integers untuk key range > 128 bit (Puzzle 140, 145, 150, 160, dst)
+num-bigint = { version = "0.4", features = ["serde", "rand"] }
+num-traits = "0.2"
+
+# Parallelisme — multi-core Kangaroo
+rayon = "1.10"
+
+# Async runtime & Web Server (Axum with WebSockets)
+tokio = { version = "1", features = ["full"] }
+axum = { version = "0.7", features = ["ws"] }
+futures-util = "0.3"
+tower = "0.5"
+tower-http = { version = "0.5", features = ["cors", "trace"] }
+
+# Database PostgreSQL
+sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "chrono"] }
+chrono = { version = "0.4", features = ["serde"] }
+dotenvy = "0.15"
+
+# HTTP client — cek on-chain status
+reqwest = { version = "0.12", features = ["json"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Logging & Tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# CLI arguments
+clap = { version = "4", features = ["derive"] }
+
+# Crypto & Math utilities
+rand = "0.8"
+sha2 = "0.10"
+ripemd = "0.1"
+bs58 = "0.5"
+hex = "0.4"
+bech32 = "0.12.0"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

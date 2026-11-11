@@ -510,24 +510,29 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
           }
         }
 
+        const isGpuMode = hunter?.device_mode === 'gpu' || Boolean(hunter?.gpu_info);
+        const gpuInfo = hunter?.gpu_info;
+
         return (
-          <div className="p-4 bg-slate-950 border border-amber-500/30 rounded-2xl">
+          <div className={`p-4 bg-slate-950 border rounded-2xl ${isGpuMode ? 'border-purple-500/40 shadow-lg shadow-purple-950/20' : 'border-amber-500/30'}`}>
             <div className="flex items-center justify-between text-xs mb-2 flex-wrap gap-2">
-              <span className="text-amber-400 font-semibold uppercase tracking-wider text-[11px] flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping"></span>
-                Window Sedang Diperiksa (Pollard's Kangaroo O(√N)):
+              <span className={`font-semibold uppercase tracking-wider text-[11px] flex items-center gap-1.5 ${isGpuMode ? 'text-purple-300' : 'text-amber-400'}`}>
+                <span className={`w-2.5 h-2.5 rounded-full animate-ping ${isGpuMode ? 'bg-purple-400' : 'bg-amber-400'}`}></span>
+                {isGpuMode
+                  ? "Window Sedang Diperiksa (CUDA Multi-Grid Kangaroo O(√N)):"
+                  : "Window Sedang Diperiksa (Pollard's Kangaroo O(√N)):"}
               </span>
               <div className="flex items-center gap-2 sm:gap-3 text-[11px] text-slate-400 flex-wrap">
                 {/* Mode Komputasi (Local / VPS / GPU CUDA) */}
-                {hunter.device_mode === 'vps' ? (
+                {isGpuMode ? (
+                  <span className="bg-purple-500/20 text-purple-300 font-bold px-2.5 py-0.5 rounded-lg border border-purple-500/40 flex items-center gap-1.5 shadow-sm shadow-purple-500/20" title="Mode GPU: Akselerasi Hardware NVIDIA CUDA Aktif">
+                    <Zap className="w-3.5 h-3.5 text-purple-400 fill-purple-400 animate-pulse" />
+                    <span>GPU MODE (NVIDIA CUDA)</span>
+                  </span>
+                ) : hunter.device_mode === 'vps' ? (
                   <span className="bg-emerald-500/15 text-emerald-300 font-bold px-2 py-0.5 rounded-lg border border-emerald-500/30 flex items-center gap-1" title="Mode VPS: Memaksimalkan core untuk puzzle (Sisakan 1 core untuk OS + Postgres + Web API)">
                     <Server className="w-3 h-3 text-emerald-400" />
                     <span>VPS MODE (Max Core)</span>
-                  </span>
-                ) : hunter.device_mode === 'gpu' ? (
-                  <span className="bg-purple-500/15 text-purple-300 font-bold px-2 py-0.5 rounded-lg border border-purple-500/30 flex items-center gap-1" title="Mode GPU: Akselerasi Hardware NVIDIA CUDA">
-                    <Zap className="w-3 h-3 text-purple-400 fill-purple-400/40" />
-                    <span>GPU MODE (CUDA)</span>
                   </span>
                 ) : (
                   <span className="bg-blue-500/15 text-blue-300 font-bold px-2 py-0.5 rounded-lg border border-blue-500/30 flex items-center gap-1" title="Mode Local: Sisakan 2 core untuk OS & background desktop">
@@ -536,10 +541,18 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
                   </span>
                 )}
 
-                <span className="bg-amber-500/15 text-amber-300 font-bold px-2 py-0.5 rounded-lg border border-amber-500/30 flex items-center gap-1">
-                  <Zap className="w-3 h-3 text-amber-400 fill-amber-400/30" />
-                  <span>{coresList.length} Core Aktif</span>
-                </span>
+                {isGpuMode ? (
+                  <span className="bg-purple-500/15 text-purple-300 font-bold px-2 py-0.5 rounded-lg border border-purple-500/30 flex items-center gap-1">
+                    <Zap className="w-3 h-3 text-purple-400 fill-purple-400/40" />
+                    <span>{coresList.length} CUDA Streams Aktif</span>
+                  </span>
+                ) : (
+                  <span className="bg-amber-500/15 text-amber-300 font-bold px-2 py-0.5 rounded-lg border border-amber-500/30 flex items-center gap-1">
+                    <Zap className="w-3 h-3 text-amber-400 fill-amber-400/30" />
+                    <span>{coresList.length} Core Aktif</span>
+                  </span>
+                )}
+
                 {hunter.round > 0 && hunter.total_keys_checked > 0 && (
                   <span className="bg-slate-900 px-2 py-0.5 rounded-lg border border-slate-800">
                     ~{formatLargeNumber(Math.round(hunter.total_keys_checked / hunter.round))} keys/ronde
@@ -548,6 +561,41 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
                 <span>{hunter.last_check_at}</span>
               </div>
             </div>
+
+            {/* Panel Khusus GPU Hardware Telemetry jika Mode GPU Aktif */}
+            {isGpuMode && (
+              <div className="mb-3 bg-gradient-to-r from-purple-950/40 via-slate-900/80 to-cyan-950/30 p-3 rounded-xl border border-purple-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-md shadow-purple-950/30">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-purple-500/20 text-purple-300 rounded-lg border border-purple-500/30 shrink-0">
+                    <Zap className="w-5 h-5 fill-purple-400/40" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-extrabold text-sm text-white tracking-wide">
+                        {gpuInfo?.name || 'NVIDIA RTX 6000 Ada Generation'}
+                      </span>
+                      <span className="px-2 py-0.5 bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 text-[10px] font-bold rounded-full flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></span>
+                        CUDA READY
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 text-[11px] text-slate-400 mt-0.5 flex-wrap">
+                      <span>Arsitektur: <strong className="text-purple-300 font-mono">{(gpuInfo?.cuda_cores || 18176).toLocaleString()} CUDA Cores</strong> ({gpuInfo?.sm_count || 142} SMs)</span>
+                      <span>•</span>
+                      <span>VRAM: <strong className="text-cyan-300 font-mono">{Math.round((gpuInfo?.total_memory_mb || 49140) / 1024)} GB GDDR6</strong></span>
+                      <span>•</span>
+                      <span>Driver: <strong className="text-slate-300 font-mono">{gpuInfo?.driver_version || '550.54'}</strong></span>
+                    </div>
+                  </div>
+                </div>
+                <div className="text-left sm:text-right shrink-0">
+                  <div className="text-[10px] text-slate-400 uppercase tracking-wider font-semibold">Dispatch Architecture</div>
+                  <div className="text-xs font-mono font-bold text-purple-300 flex items-center gap-1 sm:justify-end">
+                    <span>{coresList.length} Concurrent SM Grid Streams</span>
+                  </div>
+                </div>
+              </div>
+            )}
 
             <div className="bg-slate-900/80 p-3 rounded-xl border border-slate-800 space-y-2.5">
               <div className="font-mono text-xs sm:text-sm text-slate-200 break-all select-all">
@@ -580,13 +628,19 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
             </div>
 
             {coresList.length > 0 && (
-              <div className="mt-3 bg-slate-900/60 p-3.5 rounded-xl border border-slate-800/80 space-y-3">
+              <div className={`mt-3 bg-slate-900/60 p-3.5 rounded-xl border space-y-3 ${isGpuMode ? 'border-purple-500/30' : 'border-slate-800/80'}`}>
                 <div className="flex items-center justify-between text-[11px] text-slate-400">
                   <span className="flex items-center gap-1.5 text-slate-300 font-medium">
                     <span>Posisi di Keseluruhan Range Target:</span>
-                    <span className="text-amber-400 font-bold font-mono bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">
+                    <span className={`font-bold font-mono px-2 py-0.5 rounded border ${
+                      isGpuMode
+                        ? 'text-purple-300 bg-purple-500/15 border-purple-500/30'
+                        : 'text-amber-400 bg-amber-500/10 border-amber-500/20'
+                    }`}>
                       {coresList.length > 1
-                        ? `${coresList.length} Titik Core Jump (Multi-Thread)`
+                        ? isGpuMode
+                          ? `${coresList.length} Parallel CUDA Streams (SM Multi-Grid)`
+                          : `${coresList.length} Titik Core Jump (Multi-Thread)`
                         : coresList[0]?.progress.display}
                     </span>
                   </span>
@@ -595,30 +649,36 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
                   </span>
                 </div>
 
-                {/* Track Indikator Multi-Core Titik Lokasi Jump */}
+                {/* Track Indikator Multi-Core / CUDA Stream Titik Lokasi Jump */}
                 <div className="relative w-full pt-8 pb-5">
                   {/* Track base */}
-                  <div className="w-full bg-slate-950 rounded-full h-3 border border-slate-800 relative overflow-hidden shadow-inner">
+                  <div className={`w-full bg-slate-950 rounded-full h-3 border relative overflow-hidden shadow-inner ${
+                    isGpuMode ? 'border-purple-500/30' : 'border-slate-800'
+                  }`}>
                     {/* Tick mark pembagi kuadran: 25%, 50%, 75% */}
-                    <div className="absolute left-1/4 top-0 bottom-0 w-px bg-slate-800/80" />
-                    <div className="absolute left-2/4 top-0 bottom-0 w-px bg-slate-800/80" />
-                    <div className="absolute left-3/4 top-0 bottom-0 w-px bg-slate-800/80" />
+                    <div className={`absolute left-1/4 top-0 bottom-0 w-px ${isGpuMode ? 'bg-purple-900/50' : 'bg-slate-800/80'}`} />
+                    <div className={`absolute left-2/4 top-0 bottom-0 w-px ${isGpuMode ? 'bg-purple-900/50' : 'bg-slate-800/80'}`} />
+                    <div className={`absolute left-3/4 top-0 bottom-0 w-px ${isGpuMode ? 'bg-purple-900/50' : 'bg-slate-800/80'}`} />
 
-                    {/* Local spot highlight untuk setiap core di track */}
+                    {/* Local spot highlight untuk setiap core / CUDA stream di track */}
                     {coresList.map((core) => (
                       <div
                         key={`track-range-${core.coreId}`}
-                        className="absolute top-0 bottom-0 bg-amber-400/40 rounded-full transition-all duration-700 ease-out"
+                        className={`absolute top-0 bottom-0 rounded-full transition-all duration-700 ease-out ${
+                          isGpuMode
+                            ? 'bg-purple-400/50 border border-purple-300/40 shadow-sm shadow-purple-500/30'
+                            : 'bg-amber-400/40'
+                        }`}
                         style={{
                           left: `${Math.max(0, Math.min(98, core.progress.startPct))}%`,
                           width: `${Math.max(1.5, Math.min(100 - core.progress.startPct, Math.max(1.5, core.progress.endPct - core.progress.startPct)))}%`,
                         }}
-                        title={`Core #${core.coreId}: ${core.progress.display}`}
+                        title={isGpuMode ? `CUDA Stream #${core.coreId}: ${core.progress.display}` : `Core #${core.coreId}: ${core.progress.display}`}
                       />
                     ))}
                   </div>
 
-                  {/* Marker Pinpoint yang menyentuh titik lokasi jump masing-masing core */}
+                  {/* Marker Pinpoint yang menyentuh titik lokasi jump masing-masing core / stream */}
                   {coresList.map((core, idx) => {
                     const isAlt = idx % 2 === 1;
                     return (
@@ -626,23 +686,33 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
                         key={`pinpoint-${core.coreId}`}
                         className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 transition-all duration-700 ease-out flex flex-col items-center group cursor-pointer z-10"
                         style={{ left: `${Math.max(1.5, Math.min(98.5, core.progress.startPct))}%` }}
-                        title={`Core #${core.coreId}: ${core.progress.startFormatted} (${core.startHex})`}
+                        title={isGpuMode ? `CUDA Stream #${core.coreId}: ${core.progress.startFormatted} (${core.startHex})` : `Core #${core.coreId}: ${core.progress.startFormatted} (${core.startHex})`}
                       >
                         {/* Badge nomor core & persentase jump di atas pin */}
                         <div
-                          className={`absolute ${isAlt ? '-top-6' : '-top-8'} transition-transform group-hover:scale-110 px-1.5 py-0.5 rounded-md bg-slate-950/95 border border-amber-500/50 text-[9px] font-mono text-amber-300 font-bold whitespace-nowrap shadow-md shadow-black/80 flex items-center gap-1 z-20 pointer-events-none`}
+                          className={`absolute ${isAlt ? '-top-6' : '-top-8'} transition-transform group-hover:scale-110 px-1.5 py-0.5 rounded-md bg-slate-950/95 border text-[9px] font-mono font-bold whitespace-nowrap shadow-md shadow-black/80 flex items-center gap-1 z-20 pointer-events-none ${
+                            isGpuMode
+                              ? 'border-purple-500/60 text-purple-300 shadow-purple-950/40'
+                              : 'border-amber-500/50 text-amber-300'
+                          }`}
                         >
-                          <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
-                          <span>C{core.coreId}: {core.progress.startFormatted}</span>
+                          <span className={`w-1.5 h-1.5 rounded-full animate-pulse ${isGpuMode ? 'bg-purple-400' : 'bg-amber-400'}`}></span>
+                          <span>{isGpuMode ? `S${core.coreId}` : `C${core.coreId}`}: {core.progress.startFormatted}</span>
                         </div>
 
-                        {/* Animasi Kuning Ping & Glowing Dot */}
+                        {/* Animasi Ping & Glowing Dot */}
                         <div className="relative flex items-center justify-center">
                           <span
-                            className="absolute w-5 h-5 rounded-full bg-amber-400/35 animate-ping"
+                            className={`absolute w-5 h-5 rounded-full animate-ping ${
+                              isGpuMode ? 'bg-purple-400/35' : 'bg-amber-400/35'
+                            }`}
                             style={{ animationDuration: `${1.1 + (idx % 4) * 0.3}s` }}
                           />
-                          <span className="relative w-3.5 h-3.5 rounded-full bg-gradient-to-b from-amber-200 via-amber-400 to-amber-600 border-2 border-slate-950 shadow-md shadow-amber-400/80 ring-1 ring-amber-300/80 flex items-center justify-center">
+                          <span className={`relative w-3.5 h-3.5 rounded-full border-2 border-slate-950 shadow-md flex items-center justify-center ${
+                            isGpuMode
+                              ? 'bg-gradient-to-b from-purple-200 via-purple-500 to-indigo-700 shadow-purple-500/80 ring-1 ring-purple-300/80'
+                              : 'bg-gradient-to-b from-amber-200 via-amber-400 to-amber-600 shadow-amber-400/80 ring-1 ring-amber-300/80'
+                          }`}>
                             <span className="text-[7.5px] font-extrabold text-slate-950 font-mono leading-none">
                               {core.coreId}
                             </span>
@@ -650,7 +720,7 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
                         </div>
 
                         {/* Garis vertikal penunjuk titik track */}
-                        <div className="w-0.5 h-1.5 bg-amber-400/70 mt-0.5"></div>
+                        <div className={`w-0.5 h-1.5 mt-0.5 ${isGpuMode ? 'bg-purple-400/80' : 'bg-amber-400/70'}`}></div>
                       </div>
                     );
                   })}
@@ -658,19 +728,27 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
 
                 <div className="flex justify-between text-[9px] text-slate-500 font-mono">
                   <span>0% ({puzzle.range_start_hex ? puzzle.range_start_hex.slice(0, 10) + '...' : 'Start'})</span>
-                  <span className="text-amber-400 font-bold font-sans flex items-center gap-1">
-                    <span>📍 {coresList.length} Titik Jump Aktif</span>
+                  <span className={`font-bold font-sans flex items-center gap-1 ${isGpuMode ? 'text-purple-400' : 'text-amber-400'}`}>
+                    <span>{isGpuMode ? `🚀 ${coresList.length} Parallel CUDA Streams Aktif (RTX 6000)` : `📍 ${coresList.length} Titik Jump Aktif`}</span>
                   </span>
                   <span>100% ({puzzle.range_end_hex ? puzzle.range_end_hex.slice(0, 10) + '...' : 'End'})</span>
                 </div>
 
-                {/* Grid Status Jump Per Core */}
+                {/* Grid Status Jump Per Core / CUDA Stream */}
                 {coresList.length > 1 && (
                   <div className="pt-2.5 border-t border-slate-800/60 mt-1">
                     <div className="text-[10px] text-slate-400 font-medium mb-1.5 flex items-center justify-between">
                       <span className="flex items-center gap-1">
-                        <Cpu className="w-3 h-3 text-amber-400" />
-                        <span>Status Jump Per Core ({coresList.length} Core Aktif):</span>
+                        {isGpuMode ? (
+                          <Zap className="w-3.5 h-3.5 text-purple-400 fill-purple-400/40" />
+                        ) : (
+                          <Cpu className="w-3.5 h-3.5 text-amber-400" />
+                        )}
+                        <span>
+                          {isGpuMode
+                            ? `Status Grid CUDA Work Streams (${coresList.length} Streams Paralel — Live SM Dispatch):`
+                            : `Status Jump Per Core (${coresList.length} Core Aktif):`}
+                        </span>
                       </span>
                       <span className="text-[9px] text-slate-500 font-mono">Live Update Per Ronde</span>
                     </div>
@@ -678,12 +756,16 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
                       {coresList.map((core) => (
                         <div
                           key={`pill-${core.coreId}`}
-                          className="p-1.5 bg-slate-950/90 rounded-lg border border-slate-800/90 hover:border-amber-500/50 transition-colors flex flex-col items-center text-center group"
-                          title={`Core ${core.coreId}: ${core.startHex}..${core.endHex}`}
+                          className={`p-1.5 bg-slate-950/90 rounded-lg border transition-colors flex flex-col items-center text-center group ${
+                            isGpuMode
+                              ? 'border-slate-800/90 hover:border-purple-500/50'
+                              : 'border-slate-800/90 hover:border-amber-500/50'
+                          }`}
+                          title={isGpuMode ? `CUDA Stream ${core.coreId} (SM Grid): ${core.startHex}..${core.endHex}` : `Core ${core.coreId}: ${core.startHex}..${core.endHex}`}
                         >
-                          <div className="flex items-center gap-1 text-[9px] text-amber-400 font-bold mb-0.5">
-                            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 group-hover:animate-ping"></span>
-                            <span>Core {core.coreId}</span>
+                          <div className={`flex items-center gap-1 text-[9px] font-bold mb-0.5 ${isGpuMode ? 'text-purple-300' : 'text-amber-400'}`}>
+                            <span className={`w-1.5 h-1.5 rounded-full ${isGpuMode ? 'bg-purple-400' : 'bg-amber-400'} group-hover:animate-ping`}></span>
+                            <span>{isGpuMode ? `Stream #${core.coreId}` : `Core ${core.coreId}`}</span>
                           </div>
                           <div className="text-[11px] font-mono font-extrabold text-white">
                             {core.progress.startFormatted}

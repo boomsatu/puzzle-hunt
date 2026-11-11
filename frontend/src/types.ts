@@ -28,6 +28,18 @@ export interface WorkerWindow {
   end_hex: string;
 }
 
+export interface GpuTelemetry {
+  name: string;
+  total_memory_mb: number;
+  used_memory_mb: number;
+  driver_version: string;
+  cuda_cores: number;
+  sm_count: number;
+  cuda_streams: number;
+  is_cuda_active: boolean;
+  solver_binary?: string | null;
+}
+
 export interface HunterState {
   puzzle_num: number;
   status: HunterStatus;
@@ -44,6 +56,7 @@ export interface HunterState {
   active_workers?: number;
   active_windows?: WorkerWindow[];
   device_mode?: string;
+  gpu_info?: GpuTelemetry | null;
 }
 
 export interface FoundKey {

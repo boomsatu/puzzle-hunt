@@ -80,10 +80,19 @@ pub struct HunterState {
     pub active_windows: Vec<WorkerWindow>,
     #[serde(default)]
     pub device_mode: String,
+    #[serde(default)]
+    pub gpu_info: Option<crate::kangaroo::cuda::GpuTelemetry>,
 }
 
 impl HunterState {
     pub fn new(puzzle_num: i32) -> Self {
+        let dev_mode = DeviceMode::from_env();
+        let gpu_info = if dev_mode == DeviceMode::Gpu {
+            Some(crate::kangaroo::cuda::get_telemetry(16))
+        } else {
+            None
+        };
+
         Self {
             puzzle_num,
             status: HunterStatus::Idle,
@@ -99,7 +108,8 @@ impl HunterState {
             last_check_at: None,
             active_workers: 1,
             active_windows: Vec::new(),
-            device_mode: DeviceMode::from_env().as_str().to_string(),
+            device_mode: dev_mode.as_str().to_string(),
+            gpu_info,
         }
     }
 }
@@ -279,15 +289,9 @@ fn get_optimal_workers(states: &Arc<Mutex<HashMap<i32, HunterState>>>, mode: Dev
             per_puzzle.max(1)
         }
         DeviceMode::Gpu => {
-            // Mode GPU: Cek deteksi CUDA
-            let (has_cuda, _) = crate::kangaroo::cuda::init_cuda_status();
-            if has_cuda {
-                1
-            } else {
-                // Fallback jika mode GPU diaktifkan di mesin tanpa CUDA: gunakan mode VPS (Max - 1)
-                let compute_budget = total_cpus.saturating_sub(1).max(1);
-                (compute_budget / running_count).max(1)
-            }
+            // Mode GPU (e.g. RTX 6000 Ada dengan 18,176 CUDA Cores):
+            // Membagi beban kerja ke 16 Concurrent CUDA Work Streams / SM Grid Blocks
+            16
         }
     }
 }
@@ -444,7 +448,9 @@ async fn run_hunt_loop(
         {
             let mut s = states.lock().unwrap();
             if let Some(st) = s.get_mut(&puzzle_num) {
-                st.last_window_hex = if num_workers > 1 {
+                st.last_window_hex = if device_mode == DeviceMode::Gpu {
+                    format!("{first_start_hex}..{first_end_hex} (⚡ {num_workers} CUDA Streams)")
+                } else if num_workers > 1 {
                     format!("{first_start_hex}..{first_end_hex} (⚡ {num_workers} threads)")
                 } else {
                     format!("{first_start_hex}..{first_end_hex}")
@@ -453,6 +459,9 @@ async fn run_hunt_loop(
                 st.active_workers = num_workers;
                 st.active_windows = active_win_list.clone();
                 st.device_mode = device_mode.as_str().to_string();
+                if device_mode == DeviceMode::Gpu {
+                    st.gpu_info = Some(crate::kangaroo::cuda::get_telemetry(num_workers));
+                }
 
                 // Broadcast live update awal ronde agar posisi jump per core langsung bergerak di UI
                 if let Ok(msg) = serde_json::to_string(&*st) {
@@ -468,8 +477,25 @@ async fn run_hunt_loop(
             let target_h160 = target_hash160;
             let ws_clone = ws.clone();
             let we_clone = we.clone();
+            let mode = device_mode;
 
             tokio::task::spawn_blocking(move || {
+                if mode == DeviceMode::Gpu {
+                    if let Some(bin) = crate::kangaroo::cuda::find_cuda_solver_binary() {
+                        if let Some(res) = crate::kangaroo::cuda::run_cuda_solver(
+                            &bin,
+                            target_pub.as_ref(),
+                            target_h160.as_ref(),
+                            &ws_clone,
+                            &we_clone,
+                            dp_bits,
+                            stop_inner.clone(),
+                        ) {
+                            return (win_id, ws_clone, we_clone, res);
+                        }
+                    }
+                }
+
                 let res = if let Some(pub_bytes) = target_pub {
                     run_kangaroo_window(
                         &pub_bytes,

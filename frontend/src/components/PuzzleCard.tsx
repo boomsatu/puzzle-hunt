@@ -12,7 +12,15 @@ import {
   Copy,
   Check,
 } from 'lucide-react';
-import { HunterState, Puzzle, formatLargeNumber, formatCompactKeys, formatKeysSpeed } from '../types';
+import {
+  HunterState,
+  Puzzle,
+  formatLargeNumber,
+  formatCompactKeys,
+  formatKeysSpeed,
+  calculateRangePercentage,
+  parseWindowHexRange,
+} from '../types';
 
 interface PuzzleCardProps {
   puzzle: Puzzle;
@@ -224,11 +232,27 @@ export const PuzzleCard: React.FC<PuzzleCardProps> = ({ puzzle, hunter, destinat
                 </div>
                 <span>Total: {formatLargeNumber(hunter.total_keys_checked)}</span>
               </div>
-              {hunter.last_window_hex && (
-                <div className="font-mono text-[10px] text-slate-400 truncate mt-1">
-                  {hunter.last_window_hex}
-                </div>
-              )}
+              {hunter.last_window_hex && (() => {
+                const parsed = parseWindowHexRange(hunter.last_window_hex);
+                const progress = parsed.startHex
+                  ? calculateRangePercentage(parsed.startHex, puzzle.range_start_hex, puzzle.range_end_hex, 2)
+                  : null;
+
+                return (
+                  <div className="mt-1 space-y-1">
+                    <div className="flex items-center justify-between text-[10px] gap-1">
+                      <span className="font-mono text-slate-400 truncate" title={hunter.last_window_hex}>
+                        {hunter.last_window_hex}
+                      </span>
+                      {progress && (
+                        <span className="font-mono text-amber-400 font-bold bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20 shrink-0">
+                          {progress.formatted}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           </div>
         )}

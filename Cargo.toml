@@ -8,6 +8,22 @@ description = "Bitcoin Puzzle Hunter — Pollard's Kangaroo Engine with PostgreS
 name = "puzzle-hunt"
 path = "src/main.rs"
 
+[[bin]]
+name = "bnw-solver"
+path = "src/bin/bnw_solver.rs"
+
+[[bin]]
+name = "bnw-21-solver"
+path = "src/bin/bnw_21_solver.rs"
+
+[[bin]]
+name = "bnw-24-solver"
+path = "src/bin/bnw_24_solver.rs"
+
+[[bin]]
+name = "test-kat24"
+path = "src/bin/test_kat24.rs"
+
 [dependencies]
 # Elliptic curve secp256k1 — core algoritma Kangaroo
 secp256k1 = { version = "0.29", features = ["rand", "global-context"] }
@@ -52,10 +68,12 @@ ripemd = "0.1"
 bs58 = "0.5"
 hex = "0.4"
 bech32 = "0.12.0"
+hmac = "0.12"
 
 [profile.release]
 opt-level = 3
-lto = true
-codegen-units = 1
+lto = "thin"
+codegen-units = 4
 panic = "abort"
 strip = true
+overflow-checks = false

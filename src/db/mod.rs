@@ -92,74 +92,45 @@ pub async fn init_db(pool: &PgPool) -> Result<(), sqlx::Error> {
     Ok(())
 }
 
+#[derive(serde::Deserialize)]
+struct SeedPuzzle {
+    puzzle_number: i32,
+    bits: i32,
+    address: String,
+    pubkey_hex: String,
+    reward_btc: f64,
+    range_start_hex: String,
+    range_end_hex: String,
+}
+
 async fn seed_default_puzzles(pool: &PgPool) -> Result<(), sqlx::Error> {
-    let seeds = [
-        (
-            140,
-            140,
-            "1QKBaU6WAeycb3DbKbLBkX7vJiaS8r42Xo",
-            "031f6a332d3c5c4f2de2378c012f429cd109ba07d69690c6c701b6bb87860d6640",
-            14.0000224,
-            "0x80000000000000000000000000000000000",
-            "0xfffffffffffffffffffffffffffffffffff",
-        ),
-        (
-            145,
-            145,
-            "19GpszRNUej5yYqxXoLnbZWKew3KdVLkXg",
-            "03afdda497369e219a2c1c369954a930e4d3740968e5e4352475bcffce3140dae5",
-            14.500006,
-            "0x10000000000000000000000000000000000000",
-            "0x1fffffffffffffffffffffffffffffffffffff",
-        ),
-        (
-            150,
-            150,
-            "1MUJSJYtGPVGkBCTqGspnxyHahpt5Te8jy",
-            "03137807790ea7dc6e97901c2bc87411f45ed74a5629315c4e4b03a0a102250c49",
-            15.000016,
-            "0x20000000000000000000000000000000000000",
-            "0x3fffffffffffffffffffffffffffffffffffff",
-        ),
-        (
-            155,
-            155,
-            "1AoeP37TmHdFh8uN72fu9AqgtLrUwcv2wJ",
-            "035cd1854cae45391ca4ec428cc7e6c7d9984424b954209a8eea197b9e364c05f6",
-            15.5,
-            "0x400000000000000000000000000000000000000",
-            "0x7ffffffffffffffffffffffffffffffffffffff",
-        ),
-        (
-            160,
-            160,
-            "1NBC8uXJy1GiJ6drkiZa1WuKn51ps7EPTv",
-            "02e0a8b039282faf6fe0fd769cfbc4b6b4cf8758ba68220eac420e32b91ddfa673",
-            16.0,
-            "0x8000000000000000000000000000000000000000",
-            "0xffffffffffffffffffffffffffffffffffffffff",
-        ),
-    ];
-
-    for (p_num, bits, addr, pubk, reward, r_start, r_end) in seeds {
-        sqlx::query(
-            r#"
-            INSERT INTO puzzles (puzzle_number, bits, address, pubkey_hex, reward_btc, range_start_hex, range_end_hex)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-            ON CONFLICT (puzzle_number) DO NOTHING;
-            "#,
-        )
-        .bind(p_num)
-        .bind(bits)
-        .bind(addr)
-        .bind(pubk)
-        .bind(reward)
-        .bind(r_start)
-        .bind(r_end)
-        .execute(pool)
-        .await?;
+    const RAW_JSON: &str = include_str!("../../data/unsolved_puzzles.json");
+    if let Ok(seeds) = serde_json::from_str::<Vec<SeedPuzzle>>(RAW_JSON) {
+        for p in seeds {
+            sqlx::query(
+                r#"
+                INSERT INTO puzzles (puzzle_number, bits, address, pubkey_hex, reward_btc, range_start_hex, range_end_hex)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                ON CONFLICT (puzzle_number) DO UPDATE SET
+                    bits = EXCLUDED.bits,
+                    address = EXCLUDED.address,
+                    pubkey_hex = CASE WHEN EXCLUDED.pubkey_hex <> '' THEN EXCLUDED.pubkey_hex ELSE puzzles.pubkey_hex END,
+                    reward_btc = EXCLUDED.reward_btc,
+                    range_start_hex = EXCLUDED.range_start_hex,
+                    range_end_hex = EXCLUDED.range_end_hex;
+                "#,
+            )
+            .bind(p.puzzle_number)
+            .bind(p.bits)
+            .bind(p.address)
+            .bind(p.pubkey_hex)
+            .bind(p.reward_btc)
+            .bind(p.range_start_hex)
+            .bind(p.range_end_hex)
+            .execute(pool)
+            .await?;
+        }
     }
-
     Ok(())
 }
 

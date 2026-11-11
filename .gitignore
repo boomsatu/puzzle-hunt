@@ -9,8 +9,12 @@
 
 # Transfer receipts & private key dumps
 TRANSFER_RECEIPT_*.txt
+FOUND_KEYS_*.txt
+FOUND_BTC_*.txt
 *.key
 *.priv
+err.txt
+out.txt
 
 # Node modules & frontend artifacts
 /frontend/node_modules
@@ -20,6 +24,11 @@ TRANSFER_RECEIPT_*.txt
 # Logs & temp files
 *.log
 *.tmp
+/logs/
+
+# PID files (launcher)
+.backend.pid
+.frontend.pid
 
 # OS & Editor files
 .DS_Store

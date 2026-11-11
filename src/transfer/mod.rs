@@ -11,6 +11,85 @@ use std::time::Duration;
 
 pub const DEFAULT_RPC_URL: &str = "https://bitcoin-rpc.publicnode.com";
 
+/// Helper untuk membroadcast setiap langkah proses sweep ke WebSocket secara real-time
+pub fn broadcast_timeline(
+    ws_tx: Option<&tokio::sync::broadcast::Sender<String>>,
+    puzzle_num: i32,
+    stage: &str,
+    status: &str, // "pending", "processing", "success", "error"
+    title: &str,
+    description: &str,
+    data: serde_json::Value,
+) {
+    if let Some(tx) = ws_tx {
+        let payload = json!({
+            "event_type": "sweep_timeline",
+            "puzzle_num": puzzle_num,
+            "stage": stage,
+            "status": status,
+            "title": title,
+            "description": description,
+            "timestamp": chrono::Utc::now().to_rfc3339(),
+            "data": data,
+        });
+        if let Ok(msg) = serde_json::to_string(&payload) {
+            let _ = tx.send(msg);
+        }
+    }
+}
+
+/// Background worker untuk memantau status konfirmasi transaksi di blockchain
+pub async fn monitor_confirmation(
+    puzzle_num: i32,
+    txid: String,
+    ws_tx: tokio::sync::broadcast::Sender<String>,
+) {
+    let client = Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .unwrap_or_default();
+
+    let url = format!("https://blockstream.info/api/tx/{txid}/status");
+    let fallback_url = format!("https://mempool.space/api/tx/{txid}/status");
+
+    // Loop pemantauan konfirmasi setiap 15 detik selama maksimal 2 jam
+    for _ in 0..480 {
+        tokio::time::sleep(Duration::from_secs(15)).await;
+
+        let status_res = match client.get(&url).send().await {
+            Ok(resp) if resp.status().is_success() => resp.json::<serde_json::Value>().await.ok(),
+            _ => match client.get(&fallback_url).send().await {
+                Ok(resp) if resp.status().is_success() => resp.json::<serde_json::Value>().await.ok(),
+                _ => None,
+            },
+        };
+
+        if let Some(status) = status_res {
+            if let Some(confirmed) = status.get("confirmed").and_then(|v| v.as_bool()) {
+                if confirmed {
+                    let block_height = status.get("block_height").and_then(|v| v.as_i64()).unwrap_or(0);
+                    let block_hash = status.get("block_hash").and_then(|v| v.as_str()).unwrap_or("");
+                    broadcast_timeline(
+                        Some(&ws_tx),
+                        puzzle_num,
+                        "confirmed",
+                        "success",
+                        "⛓️ Transaksi Terkonfirmasi di Blok Bitcoin!",
+                        &format!("Transaksi telah terkonfirmasi pada blok #{block_height}! Koin 100% aman di dompet Anda."),
+                        json!({
+                            "txid": txid,
+                            "block_height": block_height,
+                            "block_hash": block_hash,
+                            "confirmed": true,
+                        }),
+                    );
+                    break;
+                }
+            }
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Utxo {
     pub txid: String,
@@ -287,6 +366,7 @@ pub async fn execute_auto_transfer(
     priv_bytes: &[u8; 32],
     src_address: &str,
     dst_address: &str,
+    ws_tx: Option<&tokio::sync::broadcast::Sender<String>>,
 ) -> Result<String, String> {
     let rpc_url = std::env::var("BITCOIN_RPC_URL").unwrap_or_else(|_| DEFAULT_RPC_URL.to_string());
 
@@ -297,8 +377,28 @@ pub async fn execute_auto_transfer(
     println!("Ke Alamat    : {dst_address}");
     println!("Node RPC     : {rpc_url}");
 
+    // Stage 2: Fetch UTXO (processing)
+    broadcast_timeline(
+        ws_tx,
+        puzzle_num,
+        "fetch_utxo",
+        "processing",
+        "🔍 Memeriksa UTXO & Saldo On-Chain...",
+        &format!("Menghubungi API Esplora/Blockstream untuk memeriksa saldo di {src_address}."),
+        json!({ "src_address": src_address }),
+    );
+
     let utxos = get_address_utxos(src_address).await;
     if utxos.is_empty() {
+        broadcast_timeline(
+            ws_tx,
+            puzzle_num,
+            "fetch_utxo",
+            "error",
+            "⚠️ Saldo UTXO Tidak Ditemukan",
+            "Tidak ada UTXO on-chain yang tersedia di alamat sumber untuk ditransfer.",
+            json!({ "src_address": src_address }),
+        );
         return Err("Tidak ada saldo/UTXO on-chain yang tersedia di alamat sumber".into());
     }
 
@@ -326,18 +426,55 @@ pub async fn execute_auto_transfer(
     let total_in: u64 = usable_utxos.iter().map(|u| u.value).sum();
     let estimated_vbytes = 10 + (usable_utxos.len() as u64 * 148) + 34;
 
+    broadcast_timeline(
+        ws_tx,
+        puzzle_num,
+        "fetch_utxo",
+        "success",
+        "✅ Saldo On-Chain Terdeteksi",
+        &format!("Ditemukan {} UTXO dengan total saldo {:.8} BTC.", usable_utxos.len(), total_in as f64 / 100_000_000.0),
+        json!({
+            "utxo_count": usable_utxos.len(),
+            "total_satoshis": total_in,
+            "total_btc": total_in as f64 / 100_000_000.0,
+        }),
+    );
+
+    // Stage 3: Prepare & Sign Tx (processing)
+    broadcast_timeline(
+        ws_tx,
+        puzzle_num,
+        "prepare_tx",
+        "processing",
+        "✍️ Menandatangani Transaksi Bitcoin (ECDSA secp256k1)...",
+        &format!("Menyusun raw transaction dengan rate {fee_rate} sat/vB (Anti Front-Running)."),
+        json!({
+            "fee_rate_sat_vb": fee_rate,
+            "estimated_vbytes": estimated_vbytes,
+            "dst_address": dst_address,
+        }),
+    );
+
     // Perhitungan Fee Presisi:
     let calculated_fee = estimated_vbytes * fee_rate;
 
     // 🛡️ HARD SAFETY CEILINGS (Perlindungan Anti Over-Pay):
     // 1. Batas maksimum absolut: 500,000 satoshis (0.005 BTC ~ $475 USD)
     // 2. Batas maksimum relatif: 5% dari total saldo yang ditarik
-    // Mustahil secara matematika fee terpotong sampai 1 BTC / 0.1 BTC!
     let max_absolute_fee_sats: u64 = 500_000; // 0.005 BTC (~$475 USD)
     let max_relative_fee_sats: u64 = (total_in / 20).max(10_000); // Max 5% dari saldo
     let total_fee = calculated_fee.min(max_absolute_fee_sats).min(max_relative_fee_sats);
 
     if total_in <= total_fee + 546 {
+        broadcast_timeline(
+            ws_tx,
+            puzzle_num,
+            "prepare_tx",
+            "error",
+            "⚠️ Saldo Tidak Cukup Untuk Biaya Miner",
+            &format!("Saldo ({total_in} sat) tidak mencukupi setelah dipotong estimasi fee ({total_fee} sat)."),
+            json!({ "total_in": total_in, "total_fee": total_fee }),
+        );
         return Err(format!("Saldo ({total_in} sat) tidak cukup setelah dipotong fee ({total_fee} sat)"));
     }
 
@@ -418,10 +555,81 @@ pub async fn execute_auto_transfer(
     final_tx.extend_from_slice(&out_script);
     final_tx.extend_from_slice(&0u32.to_le_bytes());
 
-    let raw_hex = hex::encode(final_tx);
+    let raw_hex = hex::encode(&final_tx);
+
+    broadcast_timeline(
+        ws_tx,
+        puzzle_num,
+        "prepare_tx",
+        "success",
+        "✅ Transaksi Raw Selesai Disusun",
+        &format!("Transaksi telah ditandatangani. Siap disiarkan: {:.8} BTC (Biaya Miner: {:.8} BTC).", btc_send, btc_fee),
+        json!({
+            "amount_to_send_btc": btc_send,
+            "miner_fee_btc": btc_fee,
+            "fee_rate_sat_vb": fee_rate,
+            "raw_tx_len": raw_hex.len(),
+        }),
+    );
+
+    // Stage 4: Broadcast to Mempool (processing)
+    broadcast_timeline(
+        ws_tx,
+        puzzle_num,
+        "broadcast_mempool",
+        "processing",
+        "⚡ Menyiarkan ke Node Bitcoin RPC & Mempool...",
+        &format!("Menyiarkan raw transaction ke {rpc_url}..."),
+        json!({ "rpc_url": rpc_url }),
+    );
 
     println!("\nMengirim transaksi instan...");
-    let txid = broadcast_tx(&raw_hex, Some(&rpc_url)).await?;
+    let txid = match broadcast_tx(&raw_hex, Some(&rpc_url)).await {
+        Ok(tx) => tx,
+        Err(e) => {
+            broadcast_timeline(
+                ws_tx,
+                puzzle_num,
+                "broadcast_mempool",
+                "error",
+                "⚠️ Broadcast Gagal",
+                &format!("Gagal menyiarkan ke node: {e}"),
+                json!({ "error": e }),
+            );
+            return Err(e);
+        }
+    };
+
+    broadcast_timeline(
+        ws_tx,
+        puzzle_num,
+        "broadcast_mempool",
+        "success",
+        "🚀 Diterima Oleh Jaringan Mempool Bitcoin!",
+        &format!("TxID resmi: {txid}"),
+        json!({
+            "txid": txid,
+            "explorer_url": format!("https://mempool.space/tx/{txid}"),
+            "blockchain_com_url": format!("https://www.blockchain.com/explorer/transactions/btc/{txid}"),
+        }),
+    );
+
+    // Stage 5: Sweep Completed
+    broadcast_timeline(
+        ws_tx,
+        puzzle_num,
+        "sweep_completed",
+        "success",
+        "🏆 Auto-Transfer Berhasil!",
+        &format!("Dana {:.8} BTC berhasil disapu ke dompet tujuan: {dst_address}", btc_send),
+        json!({
+            "txid": txid,
+            "from_address": src_address,
+            "to_address": dst_address,
+            "amount_btc": btc_send,
+            "miner_fee_btc": btc_fee,
+        }),
+    );
 
     println!("\n{}", "🚀".repeat(32));
     println!("🚀🚀🚀 AUTO-TRANSFER BERHASIL DIKIRIM KE MINERS! 🚀🚀🚀");

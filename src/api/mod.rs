@@ -54,6 +54,8 @@ pub fn create_router(manager: SharedManager) -> Router {
         .route("/api/hunt/status", get(all_hunt_status))
         // Found Keys (PostgreSQL)
         .route("/api/found", get(list_found_keys))
+        // Simulasi Kemenangan & Auto-Transfer Timeline
+        .route("/api/hunt/:number/simulate_celebration", post(simulate_celebration))
         // Telegram Test
         .route("/api/telegram/test", post(test_telegram_alert))
         // WebSocket Live Stream
@@ -78,12 +80,17 @@ async fn get_config() -> (StatusCode, Json<Value>) {
         .unwrap_or_else(|_| "bc1qz08nklntedluzzr9w0g3qhxrkvytayentqdshc".to_string());
     let rpc = std::env::var("BITCOIN_RPC_URL")
         .unwrap_or_else(|_| "https://bitcoin-rpc.publicnode.com".to_string());
+    let mode = std::env::var("HUNT_MODE")
+        .or_else(|_| std::env::var("DEVICE_MODE"))
+        .unwrap_or_else(|_| "local".to_string())
+        .to_lowercase();
 
     (
         StatusCode::OK,
         Json(json!({
             "destination_address": dest,
-            "rpc_url": rpc
+            "rpc_url": rpc,
+            "device_mode": mode
         })),
     )
 }
@@ -396,4 +403,178 @@ async fn handle_socket(socket: WebSocket, manager: SharedManager) {
             }
         } => {},
     }
+}
+
+/// Endpoint simulasi celebration & auto-transfer timeline untuk pengujian frontend
+async fn simulate_celebration(
+    Path(number): Path<i32>,
+    State(manager): State<SharedManager>,
+) -> (StatusCode, Json<Value>) {
+    let puzzle = match db::get_puzzle_by_number(&manager.pool, number).await {
+        Ok(Some(p)) => p,
+        _ => return (StatusCode::NOT_FOUND, Json(json!({ "error": "Puzzle not found" }))),
+    };
+
+    let destination_address = std::env::var("DESTINATION_BTC_ADDRESS")
+        .unwrap_or_else(|_| "bc1qz08nklntedluzzr9w0g3qhxrkvytayentqdshc".to_string());
+
+    let ws_tx = manager.ws_tx.clone();
+    tokio::spawn(async move {
+        use std::time::Duration;
+        let dummy_priv_hex = format!("{:064x}", (number as u64) * 999999999 + 8888888);
+        let dummy_wif = "KwDiBf89QgGbjEhKnhXJuH7LrciVrZi3qYjgd9M7rFU73sVHnoWn".to_string();
+        let dummy_txid = "f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16".to_string();
+
+        // 1. Key Found
+        crate::transfer::broadcast_timeline(
+            Some(&ws_tx),
+            number,
+            "key_found",
+            "success",
+            "🎉 Private Key Ditemukan!",
+            &format!("Kangaroo collision trap terdeteksi! Private key puzzle #{number} berhasil dipecahkan."),
+            json!({
+                "puzzle_number": number,
+                "address": puzzle.address,
+                "priv_hex": dummy_priv_hex,
+                "priv_dec": "12345678901234567890123456",
+                "wif": dummy_wif,
+                "bits": puzzle.bits,
+                "reward_btc": puzzle.reward_btc,
+            }),
+        );
+
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+
+        // 2. Fetch UTXO (processing -> success)
+        crate::transfer::broadcast_timeline(
+            Some(&ws_tx),
+            number,
+            "fetch_utxo",
+            "processing",
+            "🔍 Memeriksa UTXO & Saldo On-Chain...",
+            &format!("Menghubungi API Esplora & Blockstream untuk memeriksa saldo di {}.", puzzle.address),
+            json!({ "src_address": puzzle.address }),
+        );
+
+        tokio::time::sleep(Duration::from_millis(1800)).await;
+
+        crate::transfer::broadcast_timeline(
+            Some(&ws_tx),
+            number,
+            "fetch_utxo",
+            "success",
+            "✅ Saldo On-Chain Terdeteksi",
+            &format!("Ditemukan 1 UTXO dengan total saldo {:.8} BTC.", puzzle.reward_btc),
+            json!({
+                "utxo_count": 1,
+                "total_satoshis": (puzzle.reward_btc * 100_000_000.0) as u64,
+                "total_btc": puzzle.reward_btc,
+            }),
+        );
+
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+
+        // 3. Prepare Tx (processing -> success)
+        crate::transfer::broadcast_timeline(
+            Some(&ws_tx),
+            number,
+            "prepare_tx",
+            "processing",
+            "✍️ Menandatangani Transaksi Bitcoin (ECDSA secp256k1)...",
+            "Menghitung priority fee 25 sat/vB (Anti Front-Running) dan menandatangani input.",
+            json!({
+                "fee_rate_sat_vb": 25,
+                "estimated_vbytes": 141,
+                "dst_address": destination_address,
+            }),
+        );
+
+        tokio::time::sleep(Duration::from_millis(1800)).await;
+
+        let fee_btc = 0.00003525;
+        let send_btc = (puzzle.reward_btc - fee_btc).max(0.0);
+        crate::transfer::broadcast_timeline(
+            Some(&ws_tx),
+            number,
+            "prepare_tx",
+            "success",
+            "✅ Transaksi Raw Selesai Disusun",
+            &format!("Transaksi telah ditandatangani. Siap dikirim: {:.8} BTC (Biaya Miner: {:.8} BTC).", send_btc, fee_btc),
+            json!({
+                "amount_to_send_btc": send_btc,
+                "miner_fee_btc": fee_btc,
+                "fee_rate_sat_vb": 25,
+                "raw_tx_len": 282,
+            }),
+        );
+
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+
+        // 4. Broadcast to Mempool
+        crate::transfer::broadcast_timeline(
+            Some(&ws_tx),
+            number,
+            "broadcast_mempool",
+            "processing",
+            "⚡ Menyiarkan ke Node Bitcoin RPC & Mempool...",
+            "Menyiarkan raw transaction ke https://bitcoin-rpc.publicnode.com...",
+            json!({ "rpc_url": "https://bitcoin-rpc.publicnode.com" }),
+        );
+
+        tokio::time::sleep(Duration::from_millis(2000)).await;
+
+        crate::transfer::broadcast_timeline(
+            Some(&ws_tx),
+            number,
+            "broadcast_mempool",
+            "success",
+            "🚀 Diterima Oleh Jaringan Mempool Bitcoin!",
+            &format!("TxID resmi: {dummy_txid}"),
+            json!({
+                "txid": dummy_txid,
+                "explorer_url": format!("https://mempool.space/tx/{dummy_txid}"),
+                "blockchain_com_url": format!("https://www.blockchain.com/explorer/transactions/btc/{dummy_txid}"),
+            }),
+        );
+
+        tokio::time::sleep(Duration::from_millis(1600)).await;
+
+        // 5. Sweep Completed
+        crate::transfer::broadcast_timeline(
+            Some(&ws_tx),
+            number,
+            "sweep_completed",
+            "success",
+            "🏆 Auto-Transfer Berhasil!",
+            &format!("Dana {:.8} BTC berhasil disapu ke alamat tujuan: {destination_address}", send_btc),
+            json!({
+                "txid": dummy_txid,
+                "from_address": puzzle.address,
+                "to_address": destination_address,
+                "amount_btc": send_btc,
+                "miner_fee_btc": fee_btc,
+            }),
+        );
+
+        tokio::time::sleep(Duration::from_millis(3000)).await;
+
+        // 6. Confirmed
+        crate::transfer::broadcast_timeline(
+            Some(&ws_tx),
+            number,
+            "confirmed",
+            "success",
+            "⛓️ Transaksi Terkonfirmasi di Blok Bitcoin!",
+            "Transaksi telah terkonfirmasi pada blok #882194! Koin 100% aman di dompet Anda.",
+            json!({
+                "txid": dummy_txid,
+                "block_height": 882194,
+                "block_hash": "00000000000000000002847a9f7d98342110cbe441a20ef1a539dae07973d81b",
+                "confirmed": true,
+            }),
+        );
+    });
+
+    (StatusCode::OK, Json(json!({ "success": true, "message": "Simulasi celebration dimulai via WebSocket" })))
 }

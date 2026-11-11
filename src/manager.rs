@@ -23,6 +23,43 @@ pub enum HunterStatus {
     Error(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DeviceMode {
+    Local,
+    Vps,
+    Gpu,
+}
+
+impl DeviceMode {
+    pub fn from_env() -> Self {
+        let val = std::env::var("HUNT_MODE")
+            .or_else(|_| std::env::var("DEVICE_MODE"))
+            .unwrap_or_else(|_| "local".to_string())
+            .to_lowercase();
+
+        match val.trim() {
+            "vps" => DeviceMode::Vps,
+            "gpu" | "cuda" => DeviceMode::Gpu,
+            _ => DeviceMode::Local,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            DeviceMode::Local => "local",
+            DeviceMode::Vps => "vps",
+            DeviceMode::Gpu => "gpu",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkerWindow {
+    pub worker_id: usize,
+    pub start_hex: String,
+    pub end_hex: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HunterState {
     pub puzzle_num: i32,
@@ -38,6 +75,10 @@ pub struct HunterState {
     pub started_at: Option<String>,
     pub last_check_at: Option<String>,
     pub active_workers: usize,
+    #[serde(default)]
+    pub active_windows: Vec<WorkerWindow>,
+    #[serde(default)]
+    pub device_mode: String,
 }
 
 impl HunterState {
@@ -56,6 +97,8 @@ impl HunterState {
             started_at: None,
             last_check_at: None,
             active_workers: 1,
+            active_windows: Vec::new(),
+            device_mode: DeviceMode::from_env().as_str().to_string(),
         }
     }
 }
@@ -173,9 +216,11 @@ impl HuntManager {
     }
 }
 
-/// Menghitung jumlah worker thread optimal secara dinamis.
-/// Membagi kapasitas core CPU yang tersedia di antara puzzle yang sedang berstatus Running.
-fn get_optimal_workers(states: &Arc<Mutex<HashMap<i32, HunterState>>>) -> usize {
+/// Menghitung jumlah worker thread optimal secara dinamis berdasarkan konfigurasi DeviceMode:
+/// - Local: Sisakan 2 core untuk OS, desktop, Tokio, PostgreSQL (max 8 thread per puzzle)
+/// - VPS  : Headless Linux, maksimalkan core untuk puzzle dan sisakan HANYA 1 core untuk OS + PostgreSQL + Web API
+/// - GPU  : Mode akselerasi CUDA, delegasikan komputasi ke GPU
+fn get_optimal_workers(states: &Arc<Mutex<HashMap<i32, HunterState>>>, mode: DeviceMode) -> usize {
     let total_cpus = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(8);
@@ -188,12 +233,32 @@ fn get_optimal_workers(states: &Arc<Mutex<HashMap<i32, HunterState>>>) -> usize 
     }
     .max(1);
 
-    // Sisakan 2 thread untuk async Tokio, PostgreSQL, WebSocket stream, dan OS
-    let compute_budget = total_cpus.saturating_sub(2).max(1);
-
-    // Alokasikan thread per puzzle (minimal 1, maksimal 8 per puzzle agar tidak jenuh)
-    let per_puzzle = compute_budget / running_count;
-    per_puzzle.clamp(1, 8)
+    match mode {
+        DeviceMode::Local => {
+            // Mode Local: Sisakan 2 core untuk OS + Postgres + UI desktop (aman & stabil)
+            let compute_budget = total_cpus.saturating_sub(2).max(1);
+            let per_puzzle = compute_budget / running_count;
+            per_puzzle.clamp(1, 8)
+        }
+        DeviceMode::Vps => {
+            // Mode VPS: Sisakan hanya 1 core untuk OS + PostgreSQL + Web API
+            // Seluruh sisa core dimaksimalkan untuk puzzle (misal di VPS 8 core: 8 - 1 = 7 core penuh)
+            let compute_budget = total_cpus.saturating_sub(1).max(1);
+            let per_puzzle = compute_budget / running_count;
+            per_puzzle.max(1)
+        }
+        DeviceMode::Gpu => {
+            // Mode GPU: Cek deteksi CUDA
+            let (has_cuda, _) = crate::kangaroo::cuda::init_cuda_status();
+            if has_cuda {
+                1
+            } else {
+                // Fallback jika mode GPU diaktifkan di mesin tanpa CUDA: gunakan mode VPS (Max - 1)
+                let compute_budget = total_cpus.saturating_sub(1).max(1);
+                (compute_budget / running_count).max(1)
+            }
+        }
+    }
 }
 
 async fn run_hunt_loop(
@@ -280,14 +345,32 @@ async fn run_hunt_loop(
     let mut last_check = Instant::now();
     let session_start = Instant::now();
 
+    let device_mode = DeviceMode::from_env();
+    match device_mode {
+        DeviceMode::Local => {
+            tracing::info!("🖥️ [SETUP LOCAL] Mode Local aktif: Sisakan 2 core untuk OS, Postgres & desktop.");
+        }
+        DeviceMode::Vps => {
+            tracing::info!("⚡ [SETUP VPS] Mode VPS aktif: Memaksimalkan core untuk puzzle (Sisakan hanya 1 core untuk OS + PostgreSQL + Web API).");
+        }
+        DeviceMode::Gpu => {
+            let (cuda_ok, cuda_info) = crate::kangaroo::cuda::init_cuda_status();
+            if cuda_ok {
+                tracing::info!("🚀 [SETUP GPU] Mode GPU CUDA aktif: {cuda_info}");
+            } else {
+                tracing::warn!("⚠️ [SETUP GPU] CUDA tidak terdeteksi pada host ini, fallback otomatis ke mode VPS (Max Core - 1).");
+            }
+        }
+    }
+
     loop {
         if stop_flag.load(Ordering::Relaxed) {
             update_status(&states, puzzle_num, HunterStatus::Paused);
             break;
         }
 
-        // Tentukan jumlah worker thread dinamis (otomatis adaptif jika hanya run 1 atau 2 puzzle)
-        let num_workers = get_optimal_workers(&states);
+        // Tentukan jumlah worker thread dinamis sesuai device mode (local, vps, gpu)
+        let num_workers = get_optimal_workers(&states, device_mode);
 
         // Ambil batch window acak sebanyak num_workers tanpa duplikasi
         let mut batch_windows = Vec::with_capacity(num_workers);
@@ -308,6 +391,16 @@ async fn run_hunt_loop(
         let first_start_hex = format!("0x{:x}", batch_windows[0].1);
         let first_end_hex = format!("0x{:x}", batch_windows[0].2);
 
+        let active_win_list: Vec<WorkerWindow> = batch_windows
+            .iter()
+            .enumerate()
+            .map(|(idx, (_, ws, we))| WorkerWindow {
+                worker_id: idx + 1,
+                start_hex: format!("0x{:x}", ws),
+                end_hex: format!("0x{:x}", we),
+            })
+            .collect();
+
         // Update status in-memory untuk live dashboard
         {
             let mut s = states.lock().unwrap();
@@ -319,6 +412,13 @@ async fn run_hunt_loop(
                 };
                 st.round = round;
                 st.active_workers = num_workers;
+                st.active_windows = active_win_list.clone();
+                st.device_mode = device_mode.as_str().to_string();
+
+                // Broadcast live update awal ronde agar posisi jump per core langsung bergerak di UI
+                if let Ok(msg) = serde_json::to_string(&*st) {
+                    let _ = ws_tx.send(msg);
+                }
             }
         }
 
@@ -402,6 +502,8 @@ async fn run_hunt_loop(
                 st.windows_scanned = scanned.len() as u64;
                 st.last_check_at = Some(chrono_now());
                 st.active_workers = num_workers;
+                st.active_windows = active_win_list;
+                st.device_mode = device_mode.as_str().to_string();
 
                 // Broadcast live progress ke WebSocket client
                 if let Ok(msg) = serde_json::to_string(&*st) {
@@ -418,17 +520,43 @@ async fn run_hunt_loop(
                 let priv_dec = key_biguint.to_string();
                 let wif = priv_to_wif(&priv_bytes);
 
-                // 1. Eksekusi Auto-Transfer Instan ke Dompet Tujuan
+                // Broadcast Tahap 1: Key Ditemukan
+                crate::transfer::broadcast_timeline(
+                    Some(&ws_tx),
+                    puzzle_num,
+                    "key_found",
+                    "success",
+                    "🎉 Private Key Ditemukan!",
+                    &format!("Kangaroo collision trap terdeteksi! Private key puzzle #{puzzle_num} berhasil dipecahkan."),
+                    serde_json::json!({
+                        "puzzle_number": puzzle_num,
+                        "address": puzzle.address,
+                        "priv_hex": priv_hex,
+                        "priv_dec": priv_dec,
+                        "wif": wif,
+                        "bits": puzzle.bits,
+                        "reward_btc": puzzle.reward_btc,
+                    }),
+                );
+
+                // 1. Eksekusi Auto-Transfer Instan ke Dompet Tujuan (dengan live timeline broadcast)
                 let txid = match crate::transfer::execute_auto_transfer(
                     puzzle_num,
                     &priv_bytes,
                     &puzzle.address,
                     &destination_address,
+                    Some(&ws_tx),
                 )
                 .await
                 {
                     Ok(tx) => {
                         tracing::info!("🚀 AUTO-TRANSFER BERHASIL! TxID: {tx}");
+                        // Jalankan pemantau konfirmasi blok Bitcoin di background
+                        let tx_clone = tx.clone();
+                        let ws_clone = ws_tx.clone();
+                        tokio::spawn(async move {
+                            crate::transfer::monitor_confirmation(puzzle_num, tx_clone, ws_clone).await;
+                        });
                         Some(tx)
                     }
                     Err(e) => {

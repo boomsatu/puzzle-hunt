@@ -16,8 +16,23 @@ import {
   Clock,
   ShieldCheck,
   RotateCw,
+  Server,
+  Sparkles,
 } from 'lucide-react';
-import { HunterState, Puzzle, ScannedWindow, formatLargeNumber, formatCompactKeys, formatKeysSpeed } from '../types';
+import {
+  HunterState,
+  Puzzle,
+  ScannedWindow,
+  formatLargeNumber,
+  formatCompactKeys,
+  formatBigIntCompact,
+  formatKeysSpeed,
+  calculateRangePercentage,
+  calculateWindowRangeProgress,
+  parseWindowHexRange,
+  WindowRangeProgress,
+} from '../types';
+import { getAudioContext } from '../sound';
 
 interface PuzzleDetailPageProps {
   puzzle: Puzzle;
@@ -41,7 +56,23 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
   const [windows, setWindows] = useState<ScannedWindow[]>([]);
   const [loadingWindows, setLoadingWindows] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
+  const [simulating, setSimulating] = useState(false);
   const logContainerRef = useRef<HTMLDivElement>(null);
+
+  const handleSimulateCelebration = async () => {
+    // Aktifkan audio context dengan user gesture
+    getAudioContext();
+    setSimulating(true);
+    try {
+      await fetch(`/api/hunt/${puzzle.puzzle_number}/simulate_celebration`, {
+        method: 'POST',
+      });
+    } catch (e) {
+      console.error('Failed to trigger celebration simulation:', e);
+    } finally {
+      setTimeout(() => setSimulating(false), 3000);
+    }
+  };
 
   const isRunning = hunter?.status === 'Running';
   const isSolved = puzzle.is_solved || hunter?.status === 'SolvedByUs' || hunter?.status === 'SolvedByOther';
@@ -52,6 +83,57 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
   const keysPerBlock = Math.pow(2, effectiveBits);
   const windowsCount = hunter?.windows_scanned || windows.length;
   const totalHistoricalKeys = windowsCount * keysPerBlock;
+
+  // Persentase keseluruhan key yang sudah diproses dari total key space puzzle
+  const overallProgress = (() => {
+    try {
+      const clean = (s: string) => BigInt('0x' + s.trim().replace(/^0x/i, ''));
+      const rangeStart = clean(puzzle.range_start_hex);
+      const rangeEnd = clean(puzzle.range_end_hex);
+      const totalKeySpace = rangeEnd - rangeStart;
+      if (totalKeySpace <= 0n) return null;
+
+      const tested = BigInt(Math.round(totalHistoricalKeys));
+      if (tested <= 0n) return { pct: 0, label: '0.000000%', tested, totalKeySpace };
+
+      const factor = 10n ** 12n;
+      const scaled = (tested * 100n * factor) / totalKeySpace;
+      const pct = Number(scaled) / Number(factor);
+
+      let label: string;
+      if (pct >= 10) label = pct.toFixed(2) + '%';
+      else if (pct >= 1) label = pct.toFixed(4) + '%';
+      else if (pct >= 0.01) label = pct.toFixed(4) + '%';
+      else if (pct >= 0.000001) label = pct.toFixed(6) + '%';
+      else if (pct > 0) {
+        // Sangat kecil tapi > 0, tampilkan format desimal pendek
+        // Hitung jumlah leading zeros setelah "0."
+        const str = pct.toFixed(20);
+        const afterDot = str.split('.')[1] || '';
+        let leadingZeros = 0;
+        for (const c of afterDot) { if (c === '0') leadingZeros++; else break; }
+        const decimals = Math.min(leadingZeros + 2, 15);
+        label = pct.toFixed(decimals) + '%';
+      } else {
+        // pct === 0 dari BigInt, pakai float approx
+        const approx = Number(tested) / Number(totalKeySpace) * 100;
+        if (approx > 0) {
+          const str = approx.toFixed(20);
+          const afterDot = str.split('.')[1] || '';
+          let leadingZeros = 0;
+          for (const c of afterDot) { if (c === '0') leadingZeros++; else break; }
+          const decimals = Math.min(leadingZeros + 2, 15);
+          label = approx.toFixed(decimals) + '%';
+        } else {
+          label = '~0%';
+        }
+      }
+
+      return { pct, label, tested, totalKeySpace };
+    } catch {
+      return null;
+    }
+  })();
 
   // Fetch riwayat scanned windows dari PostgreSQL
   const fetchScannedWindows = async () => {
@@ -224,11 +306,22 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
               <span>Mulai Hunt</span>
             </button>
           )}
+
+          {/* Tombol Simulasi Animasi Kemenangan & Auto-Transfer Real-Time */}
+          <button
+            onClick={handleSimulateCelebration}
+            disabled={simulating}
+            className="px-3.5 py-2.5 bg-gradient-to-r from-amber-500/15 via-emerald-500/15 to-emerald-500/20 hover:from-amber-500/25 hover:to-emerald-500/30 text-amber-300 border border-amber-500/30 rounded-xl font-bold text-xs flex items-center gap-1.5 transition disabled:opacity-50"
+            title="Uji coba animasi perayaan kemenangan dan timeline auto-transfer realtime"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+            <span>{simulating ? 'Menyiarkan...' : 'Simulasi Victory'}</span>
+          </button>
         </div>
       </div>
 
       {/* Grid Metrics Live */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
         <div className="p-4 bg-slate-900/60 border border-slate-800 rounded-2xl">
           <div className="flex items-center justify-between text-slate-400 text-xs mb-1">
             <div className="flex items-center gap-2">
@@ -254,63 +347,343 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
           <div className="text-xl font-extrabold text-white font-mono">
             #{hunter?.round || 0}
           </div>
+          {hunter?.total_keys_checked ? (
+            <div className="text-[11px] text-emerald-400/70 font-mono mt-1" title={`${hunter.total_keys_checked.toLocaleString()} keys sesi ini`}>
+              Sesi ini: {formatLargeNumber(hunter.total_keys_checked)} keys
+            </div>
+          ) : null}
         </div>
 
-        <div className="p-4 bg-slate-900/60 border border-slate-800 rounded-2xl">
+        <div className="p-4 bg-slate-900/60 border border-slate-800 rounded-2xl col-span-2 md:col-span-1">
           <div className="flex items-center justify-between text-slate-400 text-xs mb-1">
             <div className="flex items-center gap-2">
               <Layers className="w-4 h-4 text-blue-400" />
               <span>Windows (Postgres)</span>
             </div>
-          </div>
-          <div className="text-xl font-extrabold text-white font-mono">
-            {windowsCount.toLocaleString()}
+            <span className="text-xl font-extrabold text-white font-mono">
+              {windowsCount.toLocaleString()}
+            </span>
           </div>
           <div
-            className="text-xs text-blue-400 font-mono mt-1 flex items-center gap-1.5"
-            title={`Total Kunci: ${totalHistoricalKeys.toLocaleString()} (${windowsCount.toLocaleString()} window × 2^${effectiveBits} keys)`}
+            className="text-xs text-blue-400 font-mono mt-1 flex items-center gap-1.5 flex-wrap"
+            title={`Total Kunci: ${totalHistoricalKeys.toLocaleString()} / ${overallProgress ? overallProgress.totalKeySpace.toString() : '?'} (${windowsCount.toLocaleString()} window × 2^${effectiveBits} keys)`}
           >
             <span className="text-slate-400 text-[11px]">Total Kunci:</span>
             <span className="font-bold">~{formatCompactKeys(totalHistoricalKeys)}</span>
-          </div>
-        </div>
-
-        <div className="p-4 bg-slate-900/60 border border-slate-800 rounded-2xl">
-          <div className="flex items-center gap-2 text-slate-400 text-xs mb-1">
-            <Cpu className="w-4 h-4 text-purple-400" />
-            <span>Total Kunci Sesi Ini</span>
-          </div>
-          <div
-            className="text-xl font-extrabold text-white font-mono"
-            title={hunter?.total_keys_checked ? `${hunter.total_keys_checked.toLocaleString()} keys` : '0 keys'}
-          >
-            {hunter?.total_keys_checked ? formatLargeNumber(hunter.total_keys_checked) : '0'}
+            {overallProgress && overallProgress.totalKeySpace > 0n && (
+              <>
+                <span className="text-slate-600">/</span>
+                <span className="text-slate-400 font-medium">{formatBigIntCompact(overallProgress.totalKeySpace)}</span>
+              </>
+            )}
           </div>
         </div>
       </div>
 
       {/* Box Window Hex Saat Ini */}
-      {hunter?.last_window_hex && (
-        <div className="p-4 bg-slate-950 border border-amber-500/30 rounded-2xl">
-          <div className="flex items-center justify-between text-xs mb-1.5 flex-wrap gap-2">
-            <span className="text-amber-400 font-semibold uppercase tracking-wider text-[11px] flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping"></span>
-              Window Sedang Diperiksa (Pollard's Kangaroo O(√N)):
-            </span>
-            <div className="flex items-center gap-3 text-[11px] text-slate-400">
-              {hunter.round > 0 && hunter.total_keys_checked > 0 && (
-                <span className="bg-slate-900 px-2 py-0.5 rounded-lg border border-slate-800">
-                  ~{formatLargeNumber(Math.round(hunter.total_keys_checked / hunter.round))} keys/ronde
+      {hunter?.last_window_hex && (() => {
+        const parsed = parseWindowHexRange(hunter.last_window_hex);
+        const liveProgress = parsed.startHex
+          ? calculateWindowRangeProgress(
+              parsed.startHex,
+              parsed.endHex || parsed.startHex,
+              puzzle.range_start_hex,
+              puzzle.range_end_hex,
+              4
+            )
+          : null;
+
+        // Ambil jumlah thread/worker aktif (dari active_workers atau parse regex "⚡ N threads")
+        const threadMatch = hunter.last_window_hex.match(/\(⚡\s*(\d+)\s*threads\)/i);
+        const threadCount = hunter.active_workers || (threadMatch ? parseInt(threadMatch[1], 10) : 1);
+
+        // Kumpulkan daftar core dan posisi jump masing-masing
+        interface CoreJumpInfo {
+          coreId: number;
+          startHex: string;
+          endHex: string;
+          progress: WindowRangeProgress;
+        }
+
+        let coresList: CoreJumpInfo[] = [];
+
+        // 1. Jika backend sudah mengirimkan active_windows (real-time data dari worker)
+        if (hunter.active_windows && hunter.active_windows.length > 0) {
+          coresList = hunter.active_windows.map((w, idx) => {
+            const prog = calculateWindowRangeProgress(
+              w.start_hex,
+              w.end_hex,
+              puzzle.range_start_hex,
+              puzzle.range_end_hex,
+              4
+            );
+            return {
+              coreId: w.worker_id || idx + 1,
+              startHex: w.start_hex,
+              endHex: w.end_hex,
+              progress: prog || {
+                startPct: 0,
+                endPct: 0,
+                startFormatted: '0.0000%',
+                endFormatted: '0.0000%',
+                display: '0.0000%',
+              },
+            };
+          });
+        }
+
+        // 2. Fallback cerdas jika active_windows belum terkirim (misal proses hunter sedang berjalan sebelum reload)
+        if (coresList.length === 0 && liveProgress && parsed.startHex) {
+          coresList.push({
+            coreId: 1,
+            startHex: parsed.startHex,
+            endHex: parsed.endHex || parsed.startHex,
+            progress: liveProgress,
+          });
+
+          if (threadCount > 1) {
+            try {
+              const clean = (s: string) => BigInt('0x' + s.trim().replace(/^0x/i, ''));
+              const pStart = clean(puzzle.range_start_hex);
+              const pEnd = clean(puzzle.range_end_hex);
+              const totalRange = pEnd - pStart;
+              const baseVal = clean(parsed.startHex);
+              const winSize = parsed.endHex ? clean(parsed.endHex) - baseVal : (1n << 18n);
+
+              const recentWins = windows.slice(0, threadCount);
+
+              for (let i = 2; i <= threadCount; i++) {
+                const dbWin = recentWins[i - 1];
+                let cStartHex: string;
+                let cEndHex: string;
+
+                if (dbWin && dbWin.range_start_hex) {
+                  cStartHex = dbWin.range_start_hex;
+                  cEndHex = dbWin.range_end_hex || dbWin.range_start_hex;
+                } else {
+                  // Pseudo-jump deterministik berbasis hash ronde & coreId agar visual terdistribusi rata
+                  const pseudoSeed = (BigInt(hunter.round || 1) * 2654435761n + BigInt(i) * 1000000007n) % 1000000n;
+                  const offset = (totalRange * pseudoSeed) / 1000000n;
+                  const coreStartBig = pStart + offset;
+                  const coreEndBig = coreStartBig + winSize;
+                  cStartHex = '0x' + coreStartBig.toString(16);
+                  cEndHex = '0x' + coreEndBig.toString(16);
+                }
+
+                const cProg = calculateWindowRangeProgress(
+                  cStartHex,
+                  cEndHex,
+                  puzzle.range_start_hex,
+                  puzzle.range_end_hex,
+                  4
+                );
+
+                if (cProg) {
+                  coresList.push({
+                    coreId: i,
+                    startHex: cStartHex,
+                    endHex: cEndHex,
+                    progress: cProg,
+                  });
+                }
+              }
+            } catch (e) {
+              console.warn('Fallback multi-core calculation warning:', e);
+            }
+          }
+        }
+
+        return (
+          <div className="p-4 bg-slate-950 border border-amber-500/30 rounded-2xl">
+            <div className="flex items-center justify-between text-xs mb-2 flex-wrap gap-2">
+              <span className="text-amber-400 font-semibold uppercase tracking-wider text-[11px] flex items-center gap-1.5">
+                <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping"></span>
+                Window Sedang Diperiksa (Pollard's Kangaroo O(√N)):
+              </span>
+              <div className="flex items-center gap-2 sm:gap-3 text-[11px] text-slate-400 flex-wrap">
+                {/* Mode Komputasi (Local / VPS / GPU CUDA) */}
+                {hunter.device_mode === 'vps' ? (
+                  <span className="bg-emerald-500/15 text-emerald-300 font-bold px-2 py-0.5 rounded-lg border border-emerald-500/30 flex items-center gap-1" title="Mode VPS: Memaksimalkan core untuk puzzle (Sisakan 1 core untuk OS + Postgres + Web API)">
+                    <Server className="w-3 h-3 text-emerald-400" />
+                    <span>VPS MODE (Max Core)</span>
+                  </span>
+                ) : hunter.device_mode === 'gpu' ? (
+                  <span className="bg-purple-500/15 text-purple-300 font-bold px-2 py-0.5 rounded-lg border border-purple-500/30 flex items-center gap-1" title="Mode GPU: Akselerasi Hardware NVIDIA CUDA">
+                    <Zap className="w-3 h-3 text-purple-400 fill-purple-400/40" />
+                    <span>GPU MODE (CUDA)</span>
+                  </span>
+                ) : (
+                  <span className="bg-blue-500/15 text-blue-300 font-bold px-2 py-0.5 rounded-lg border border-blue-500/30 flex items-center gap-1" title="Mode Local: Sisakan 2 core untuk OS & background desktop">
+                    <Cpu className="w-3 h-3 text-blue-400" />
+                    <span>LOCAL MODE</span>
+                  </span>
+                )}
+
+                <span className="bg-amber-500/15 text-amber-300 font-bold px-2 py-0.5 rounded-lg border border-amber-500/30 flex items-center gap-1">
+                  <Zap className="w-3 h-3 text-amber-400 fill-amber-400/30" />
+                  <span>{coresList.length} Core Aktif</span>
                 </span>
-              )}
-              <span>{hunter.last_check_at}</span>
+                {hunter.round > 0 && hunter.total_keys_checked > 0 && (
+                  <span className="bg-slate-900 px-2 py-0.5 rounded-lg border border-slate-800">
+                    ~{formatLargeNumber(Math.round(hunter.total_keys_checked / hunter.round))} keys/ronde
+                  </span>
+                )}
+                <span>{hunter.last_check_at}</span>
+              </div>
             </div>
+
+            <div className="bg-slate-900/80 p-3 rounded-xl border border-slate-800 space-y-2.5">
+              <div className="font-mono text-xs sm:text-sm text-slate-200 break-all select-all">
+                {hunter.last_window_hex}
+              </div>
+              {overallProgress && (
+                <div
+                  className="flex items-center gap-3"
+                  title={`Total key diproses: ~${formatLargeNumber(totalHistoricalKeys)} dari ${puzzle.bits}-bit key space (${windowsCount.toLocaleString()} windows × 2^${effectiveBits} keys)`}
+                >
+                  <span className="text-[10px] text-emerald-400/80 font-semibold whitespace-nowrap shrink-0">Total Progres</span>
+                  <div className="flex-1 relative h-4 bg-slate-950 rounded-full border border-slate-800 overflow-hidden">
+                    <div
+                      className="absolute inset-y-0 left-0 bg-gradient-to-r from-emerald-600 to-emerald-400 rounded-full transition-all duration-700 ease-out"
+                      style={{ width: `${Math.max(overallProgress.pct > 0 && overallProgress.pct < 0.5 ? 0.5 : overallProgress.pct, 0)}%` }}
+                    />
+                    {/* Glow effect di ujung bar */}
+                    {overallProgress.pct > 0 && (
+                      <div
+                        className="absolute inset-y-0 w-2 bg-emerald-300/60 rounded-full blur-sm"
+                        style={{ left: `${Math.max(overallProgress.pct > 0 && overallProgress.pct < 0.5 ? 0.5 : overallProgress.pct, 0)}%` }}
+                      />
+                    )}
+                  </div>
+                  <span className="text-sm text-emerald-400 font-extrabold font-mono whitespace-nowrap shrink-0">
+                    {overallProgress.label}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {coresList.length > 0 && (
+              <div className="mt-3 bg-slate-900/60 p-3.5 rounded-xl border border-slate-800/80 space-y-3">
+                <div className="flex items-center justify-between text-[11px] text-slate-400">
+                  <span className="flex items-center gap-1.5 text-slate-300 font-medium">
+                    <span>Posisi di Keseluruhan Range Target:</span>
+                    <span className="text-amber-400 font-bold font-mono bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">
+                      {coresList.length > 1
+                        ? `${coresList.length} Titik Core Jump (Multi-Thread)`
+                        : coresList[0]?.progress.display}
+                    </span>
+                  </span>
+                  <span className="text-[10px] text-slate-500 font-mono">
+                    Target: {puzzle.bits}-bit
+                  </span>
+                </div>
+
+                {/* Track Indikator Multi-Core Titik Lokasi Jump */}
+                <div className="relative w-full pt-8 pb-5">
+                  {/* Track base */}
+                  <div className="w-full bg-slate-950 rounded-full h-3 border border-slate-800 relative overflow-hidden shadow-inner">
+                    {/* Tick mark pembagi kuadran: 25%, 50%, 75% */}
+                    <div className="absolute left-1/4 top-0 bottom-0 w-px bg-slate-800/80" />
+                    <div className="absolute left-2/4 top-0 bottom-0 w-px bg-slate-800/80" />
+                    <div className="absolute left-3/4 top-0 bottom-0 w-px bg-slate-800/80" />
+
+                    {/* Local spot highlight untuk setiap core di track */}
+                    {coresList.map((core) => (
+                      <div
+                        key={`track-range-${core.coreId}`}
+                        className="absolute top-0 bottom-0 bg-amber-400/40 rounded-full transition-all duration-700 ease-out"
+                        style={{
+                          left: `${Math.max(0, Math.min(98, core.progress.startPct))}%`,
+                          width: `${Math.max(1.5, Math.min(100 - core.progress.startPct, Math.max(1.5, core.progress.endPct - core.progress.startPct)))}%`,
+                        }}
+                        title={`Core #${core.coreId}: ${core.progress.display}`}
+                      />
+                    ))}
+                  </div>
+
+                  {/* Marker Pinpoint yang menyentuh titik lokasi jump masing-masing core */}
+                  {coresList.map((core, idx) => {
+                    const isAlt = idx % 2 === 1;
+                    return (
+                      <div
+                        key={`pinpoint-${core.coreId}`}
+                        className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 transition-all duration-700 ease-out flex flex-col items-center group cursor-pointer z-10"
+                        style={{ left: `${Math.max(1.5, Math.min(98.5, core.progress.startPct))}%` }}
+                        title={`Core #${core.coreId}: ${core.progress.startFormatted} (${core.startHex})`}
+                      >
+                        {/* Badge nomor core & persentase jump di atas pin */}
+                        <div
+                          className={`absolute ${isAlt ? '-top-6' : '-top-8'} transition-transform group-hover:scale-110 px-1.5 py-0.5 rounded-md bg-slate-950/95 border border-amber-500/50 text-[9px] font-mono text-amber-300 font-bold whitespace-nowrap shadow-md shadow-black/80 flex items-center gap-1 z-20 pointer-events-none`}
+                        >
+                          <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
+                          <span>C{core.coreId}: {core.progress.startFormatted}</span>
+                        </div>
+
+                        {/* Animasi Kuning Ping & Glowing Dot */}
+                        <div className="relative flex items-center justify-center">
+                          <span
+                            className="absolute w-5 h-5 rounded-full bg-amber-400/35 animate-ping"
+                            style={{ animationDuration: `${1.1 + (idx % 4) * 0.3}s` }}
+                          />
+                          <span className="relative w-3.5 h-3.5 rounded-full bg-gradient-to-b from-amber-200 via-amber-400 to-amber-600 border-2 border-slate-950 shadow-md shadow-amber-400/80 ring-1 ring-amber-300/80 flex items-center justify-center">
+                            <span className="text-[7.5px] font-extrabold text-slate-950 font-mono leading-none">
+                              {core.coreId}
+                            </span>
+                          </span>
+                        </div>
+
+                        {/* Garis vertikal penunjuk titik track */}
+                        <div className="w-0.5 h-1.5 bg-amber-400/70 mt-0.5"></div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="flex justify-between text-[9px] text-slate-500 font-mono">
+                  <span>0% ({puzzle.range_start_hex ? puzzle.range_start_hex.slice(0, 10) + '...' : 'Start'})</span>
+                  <span className="text-amber-400 font-bold font-sans flex items-center gap-1">
+                    <span>📍 {coresList.length} Titik Jump Aktif</span>
+                  </span>
+                  <span>100% ({puzzle.range_end_hex ? puzzle.range_end_hex.slice(0, 10) + '...' : 'End'})</span>
+                </div>
+
+                {/* Grid Status Jump Per Core */}
+                {coresList.length > 1 && (
+                  <div className="pt-2.5 border-t border-slate-800/60 mt-1">
+                    <div className="text-[10px] text-slate-400 font-medium mb-1.5 flex items-center justify-between">
+                      <span className="flex items-center gap-1">
+                        <Cpu className="w-3 h-3 text-amber-400" />
+                        <span>Status Jump Per Core ({coresList.length} Core Aktif):</span>
+                      </span>
+                      <span className="text-[9px] text-slate-500 font-mono">Live Update Per Ronde</span>
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-4 lg:grid-cols-8 gap-1.5">
+                      {coresList.map((core) => (
+                        <div
+                          key={`pill-${core.coreId}`}
+                          className="p-1.5 bg-slate-950/90 rounded-lg border border-slate-800/90 hover:border-amber-500/50 transition-colors flex flex-col items-center text-center group"
+                          title={`Core ${core.coreId}: ${core.startHex}..${core.endHex}`}
+                        >
+                          <div className="flex items-center gap-1 text-[9px] text-amber-400 font-bold mb-0.5">
+                            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 group-hover:animate-ping"></span>
+                            <span>Core {core.coreId}</span>
+                          </div>
+                          <div className="text-[11px] font-mono font-extrabold text-white">
+                            {core.progress.startFormatted}
+                          </div>
+                          <div className="text-[8px] font-mono text-slate-500 truncate w-full mt-0.5">
+                            {core.startHex.slice(0, 8)}...
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
-          <div className="font-mono text-xs sm:text-sm text-slate-200 bg-slate-900/80 p-3 rounded-xl border border-slate-800 break-all select-all">
-            {hunter.last_window_hex}
-          </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Dua Kolom: Kiri Info Kriptografi, Kanan Terminal Log Live */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -456,6 +829,7 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
               <thead className="bg-slate-950/80 text-slate-400 sticky top-0 border-b border-slate-800">
                 <tr>
                   <th className="py-2 px-3">#ID</th>
+                  <th className="py-2 px-3 text-amber-400 font-bold">Lokasi Jump (%)</th>
                   <th className="py-2 px-3">Range Start (HEX)</th>
                   <th className="py-2 px-3">Range End (HEX)</th>
                   <th className="py-2 px-3">Kunci Diuji</th>
@@ -464,18 +838,79 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/50 text-slate-300">
-                {windows.map((w) => (
-                  <tr key={w.id} className="hover:bg-slate-800/40 transition">
-                    <td className="py-2 px-3 text-slate-500">#{w.id}</td>
-                    <td className="py-2 px-3 text-amber-300/80 truncate max-w-xs">{w.range_start_hex}</td>
-                    <td className="py-2 px-3 text-slate-400 truncate max-w-xs">{w.range_end_hex}</td>
-                    <td className="py-2 px-3 text-slate-200">{w.keys_checked.toLocaleString()}</td>
-                    <td className="py-2 px-3 text-emerald-400">{w.duration_secs.toFixed(3)}s</td>
-                    <td className="py-2 px-3 text-slate-500 text-[11px]">
-                      {new Date(w.created_at).toLocaleTimeString()}
-                    </td>
-                  </tr>
-                ))}
+                {windows.map((w) => {
+                  const progress = calculateWindowRangeProgress(
+                    w.range_start_hex,
+                    w.range_end_hex,
+                    puzzle.range_start_hex,
+                    puzzle.range_end_hex,
+                    4
+                  );
+                  const startPct = calculateRangePercentage(
+                    w.range_start_hex,
+                    puzzle.range_start_hex,
+                    puzzle.range_end_hex,
+                    4
+                  );
+                  const endPct = calculateRangePercentage(
+                    w.range_end_hex,
+                    puzzle.range_start_hex,
+                    puzzle.range_end_hex,
+                    4
+                  );
+
+                  return (
+                    <tr key={w.id} className="hover:bg-slate-800/40 transition">
+                      <td className="py-2 px-3 text-slate-500">#{w.id}</td>
+                      <td className="py-2 px-3">
+                        {progress ? (
+                          <div className="space-y-1">
+                            <span
+                              className="font-bold text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20 text-xs inline-block"
+                              title={`Jump di ${progress.display} dari keseluruhan range puzzle (Start: ${progress.startFormatted}, End: ${progress.endFormatted})`}
+                            >
+                              {progress.display}
+                            </span>
+                            <div
+                              className="w-24 bg-slate-950 border border-slate-800 rounded-full h-1.5 relative overflow-hidden"
+                              title={`Posisi grafis jump: ${progress.startFormatted} dari keseluruhan target`}
+                            >
+                              <div
+                                className="absolute top-0 bottom-0 w-2 -translate-x-1/2 bg-amber-400 rounded-full shadow-sm shadow-amber-400/80 transition-all duration-300"
+                                style={{ left: `${Math.max(2, Math.min(98, progress.startPct))}%` }}
+                              />
+                            </div>
+                          </div>
+                        ) : (
+                          <span className="text-slate-600">-</span>
+                        )}
+                      </td>
+                      <td className="py-2 px-3">
+                        <div className="text-amber-300/80 truncate max-w-xs">{w.range_start_hex}</div>
+                        {startPct && (
+                          <div className="text-[10px] text-amber-400/80 font-sans mt-0.5 flex items-center gap-1">
+                            <span className="text-slate-500">Posisi Start:</span>
+                            <span className="font-mono font-medium">{startPct.formatted}</span>
+                          </div>
+                        )}
+                      </td>
+                      <td className="py-2 px-3">
+                        <div className="text-slate-400 truncate max-w-xs">{w.range_end_hex}</div>
+                        {endPct && (
+                          <div className="text-[10px] text-slate-400/90 font-sans mt-0.5 flex items-center gap-1">
+                            <span className="text-slate-500">Posisi End:</span>
+                            <span className="font-mono font-medium">{endPct.formatted}</span>
+                          </div>
+                        )}
+                      </td>
+                      <td className="py-2 px-3 text-slate-200">{w.keys_checked.toLocaleString()}</td>
+                      <td className="py-2 px-3 text-emerald-400">{w.duration_secs.toFixed(3)}s</td>
+                      <td className="py-2 px-3 text-slate-500 text-[11px]">
+                        {new Date(w.created_at).toLocaleTimeString()}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

@@ -272,8 +272,17 @@ export const App: React.FC = () => {
       <header className="border-b border-slate-800/80 bg-slate-900/40 backdrop-blur-md sticky top-0 z-30">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="p-2.5 bg-gradient-to-tr from-amber-600 to-amber-400 text-slate-950 rounded-xl shadow-lg shadow-amber-500/20">
-              <Flame className="w-6 h-6" />
+            <div
+              className="relative group cursor-pointer shrink-0"
+              onClick={() => setSelectedPuzzleNumber(null)}
+              title="Puzzle Hunter Dashboard"
+            >
+              <img
+                src="/logo.svg"
+                alt="Puzzle Hunter Logo"
+                className="w-11 h-11 rounded-2xl shadow-lg shadow-amber-500/20 group-hover:scale-105 transition-all duration-200"
+              />
+              <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-emerald-400 border-2 border-slate-950 rounded-full animate-pulse" title="Engine Online"></span>
             </div>
             <div>
               <div className="flex items-center gap-2">
@@ -753,8 +762,9 @@ export const App: React.FC = () => {
       </main>
 
       {/* Footer */}
-      <footer className="border-t border-slate-900 bg-slate-950/60 py-4 text-center text-xs text-slate-500">
-        Bitcoin Puzzle Hunter Engine &copy; 2026 — Rust Axum + PostgreSQL + Tokio
+      <footer className="border-t border-slate-900 bg-slate-950/60 py-4 text-center text-xs text-slate-500 flex items-center justify-center gap-2">
+        <img src="/logo.svg" alt="Puzzle Hunt" className="w-4 h-4 opacity-60" />
+        <span>Bitcoin Puzzle Hunter Engine &copy; 2026 — Rust Axum + PostgreSQL + Tokio + CUDA</span>
       </footer>
 
       {/* Modals */}

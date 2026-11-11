@@ -17,6 +17,7 @@ use crate::kangaroo::{biguint_to_scalar_32, run_kangaroo_window};
 pub enum HunterStatus {
     Idle,
     Running,
+    Pausing,
     Paused,
     SolvedByUs,
     SolvedByOther,
@@ -107,6 +108,7 @@ pub struct HuntManager {
     pub pool: PgPool,
     pub states: Arc<Mutex<HashMap<i32, HunterState>>>,
     pub stop_flags: Arc<Mutex<HashMap<i32, Arc<AtomicBool>>>>,
+    pub pause_flags: Arc<Mutex<HashMap<i32, Arc<AtomicBool>>>>,
     pub ws_tx: tokio::sync::broadcast::Sender<String>,
 }
 
@@ -117,6 +119,7 @@ impl HuntManager {
             pool,
             states: Arc::new(Mutex::new(HashMap::new())),
             stop_flags: Arc::new(Mutex::new(HashMap::new())),
+            pause_flags: Arc::new(Mutex::new(HashMap::new())),
             ws_tx,
         }
     }
@@ -129,7 +132,25 @@ impl HuntManager {
         self.states.lock().unwrap().values().cloned().collect()
     }
 
-    pub fn stop(&self, puzzle_num: i32) {
+    /// Jeda cerdas (Smart Graceful Pause):
+    /// Memberi sinyal agar worker menyelesaikan komputasi window aktif dan menyimpan
+    /// seluruh riwayat ke PostgreSQL sebelum proses benar-benar dijeda.
+    pub fn smart_pause(&self, puzzle_num: i32) {
+        if let Some(flag) = self.pause_flags.lock().unwrap().get(&puzzle_num) {
+            flag.store(true, Ordering::Relaxed);
+        }
+        if let Some(state) = self.states.lock().unwrap().get_mut(&puzzle_num) {
+            if state.status == HunterStatus::Running {
+                state.status = HunterStatus::Pausing;
+                if let Ok(msg) = serde_json::to_string(&*state) {
+                    let _ = self.ws_tx.send(msg);
+                }
+            }
+        }
+    }
+
+    /// Hard Stop darurat (langsung hentikan worker jika sangat mendesak)
+    pub fn force_stop(&self, puzzle_num: i32) {
         if let Some(flag) = self.stop_flags.lock().unwrap().get(&puzzle_num) {
             flag.store(true, Ordering::Relaxed);
         }
@@ -139,6 +160,11 @@ impl HuntManager {
                 let _ = self.ws_tx.send(msg);
             }
         }
+    }
+
+    /// Default stop menggunakan Smart Pause agar tidak merusak data window
+    pub fn stop(&self, puzzle_num: i32) {
+        self.smart_pause(puzzle_num);
     }
 
     pub fn stop_all(&self) {
@@ -167,11 +193,14 @@ impl HuntManager {
         }
 
         // Hentikan proses jika sedang berjalan
-        self.stop(puzzle_num);
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        self.force_stop(puzzle_num);
+        tokio::time::sleep(Duration::from_millis(150)).await;
 
         let stop_flag = Arc::new(AtomicBool::new(false));
         self.stop_flags.lock().unwrap().insert(puzzle_num, stop_flag.clone());
+
+        let pause_flag = Arc::new(AtomicBool::new(false));
+        self.pause_flags.lock().unwrap().insert(puzzle_num, pause_flag.clone());
 
         let now_str = chrono_now();
         let new_state = HunterState {
@@ -194,6 +223,7 @@ impl HuntManager {
         let pool = self.pool.clone();
         let states = self.states.clone();
         let stop_flag_cloned = stop_flag.clone();
+        let pause_flag_cloned = pause_flag.clone();
         let destination_address_cloned = destination_address.clone();
         let ws_tx_cloned = self.ws_tx.clone();
 
@@ -206,6 +236,7 @@ impl HuntManager {
                 check_interval_secs,
                 destination_address_cloned,
                 states,
+                pause_flag_cloned,
                 stop_flag_cloned,
                 ws_tx_cloned,
             )
@@ -228,7 +259,7 @@ fn get_optimal_workers(states: &Arc<Mutex<HashMap<i32, HunterState>>>, mode: Dev
     let running_count = {
         let s = states.lock().unwrap();
         s.values()
-            .filter(|st| st.status == HunterStatus::Running)
+            .filter(|st| st.status == HunterStatus::Running || st.status == HunterStatus::Pausing)
             .count()
     }
     .max(1);
@@ -268,6 +299,7 @@ async fn run_hunt_loop(
     check_interval_secs: u64,
     destination_address: String,
     states: Arc<Mutex<HashMap<i32, HunterState>>>,
+    pause_flag: Arc<AtomicBool>,
     stop_flag: Arc<AtomicBool>,
     ws_tx: tokio::sync::broadcast::Sender<String>,
 ) {
@@ -364,8 +396,15 @@ async fn run_hunt_loop(
     }
 
     loop {
-        if stop_flag.load(Ordering::Relaxed) {
+        // Cek sinyal jeda cerdas (Smart Pause) atau paksa stop sebelum memulai batch baru
+        if pause_flag.load(Ordering::Relaxed) || stop_flag.load(Ordering::Relaxed) {
+            tracing::info!("⏸️ [SMART PAUSE] Hunter puzzle #{puzzle_num} dijeda secara aman.");
             update_status(&states, puzzle_num, HunterStatus::Paused);
+            if let Some(st) = states.lock().unwrap().get(&puzzle_num) {
+                if let Ok(msg) = serde_json::to_string(st) {
+                    let _ = ws_tx.send(msg);
+                }
+            }
             break;
         }
 
@@ -622,6 +661,18 @@ async fn run_hunt_loop(
                 tracing::warn!("🛑 Puzzle #{} telah solved oleh orang lain di on-chain!", puzzle_num);
                 break;
             }
+        }
+
+        // Cek sinyal jeda cerdas (Smart Pause) setelah seluruh riwayat window selesai disimpan ke PostgreSQL
+        if pause_flag.load(Ordering::Relaxed) || stop_flag.load(Ordering::Relaxed) {
+            tracing::info!("⏸️ [SMART PAUSE] Seluruh riwayat window aktif puzzle #{puzzle_num} telah tersimpan di PostgreSQL. Mengubah status hunter ke PAUSED.");
+            update_status(&states, puzzle_num, HunterStatus::Paused);
+            if let Some(st) = states.lock().unwrap().get(&puzzle_num) {
+                if let Ok(msg) = serde_json::to_string(st) {
+                    let _ = ws_tx.send(msg);
+                }
+            }
+            break;
         }
     }
 }

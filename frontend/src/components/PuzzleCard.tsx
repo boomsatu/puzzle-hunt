@@ -11,6 +11,7 @@ import {
   CheckCircle,
   Copy,
   Check,
+  Loader2,
 } from 'lucide-react';
 import {
   HunterState,
@@ -36,6 +37,7 @@ export const PuzzleCard: React.FC<PuzzleCardProps> = ({ puzzle, hunter, destinat
   const [copiedAddr, setCopiedAddr] = useState(false);
 
   const isRunning = hunter?.status === 'Running';
+  const isPausing = hunter?.status === 'Pausing';
   const isSolved = puzzle.is_solved || hunter?.status === 'SolvedByUs' || hunter?.status === 'SolvedByOther';
 
   const handleStart = async () => {
@@ -91,7 +93,9 @@ export const PuzzleCard: React.FC<PuzzleCardProps> = ({ puzzle, hunter, destinat
   return (
     <div
       className={`rounded-2xl border transition-all duration-200 overflow-hidden ${
-        isRunning
+        isPausing
+          ? 'bg-slate-900/90 border-amber-500/30 shadow-lg shadow-amber-500/5 ring-1 ring-amber-500/10'
+          : isRunning
           ? 'bg-slate-900/90 border-amber-500/50 shadow-lg shadow-amber-500/5 ring-1 ring-amber-500/20'
           : isSolved
           ? 'bg-slate-900/70 border-emerald-500/40'
@@ -112,10 +116,19 @@ export const PuzzleCard: React.FC<PuzzleCardProps> = ({ puzzle, hunter, destinat
               <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
                 <CheckCircle className="w-3 h-3" /> SOLVED
               </span>
+            ) : isPausing ? (
+              <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30 flex items-center gap-1.5 animate-pulse">
+                <Loader2 className="w-3 h-3 animate-spin text-amber-400" />
+                MENJEDA...
+              </span>
             ) : isRunning ? (
               <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center gap-1.5 animate-pulse">
                 <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
                 RUNNING
+              </span>
+            ) : hunter?.status === 'Paused' ? (
+              <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-500/10 text-amber-300/80 border border-amber-500/20">
+                PAUSED
               </span>
             ) : (
               <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-800/60 text-slate-400">
@@ -130,7 +143,7 @@ export const PuzzleCard: React.FC<PuzzleCardProps> = ({ puzzle, hunter, destinat
 
         <button
           onClick={handleDelete}
-          disabled={isRunning || loading}
+          disabled={isRunning || isPausing || loading}
           title="Hapus puzzle dari database"
           className="text-slate-500 hover:text-rose-400 p-1.5 rounded-lg hover:bg-slate-800 transition disabled:opacity-30"
         >
@@ -259,14 +272,23 @@ export const PuzzleCard: React.FC<PuzzleCardProps> = ({ puzzle, hunter, destinat
 
         {/* Action Controls */}
         <div className="pt-2 space-y-2">
-          {isRunning ? (
+          {isPausing ? (
+            <button
+              disabled
+              className="w-full py-2.5 bg-amber-500/15 text-amber-300 border border-amber-500/30 rounded-xl font-semibold text-xs flex items-center justify-center gap-2 cursor-wait"
+            >
+              <Loader2 className="w-4 h-4 animate-spin text-amber-400" />
+              <span>Menyelesaikan Window...</span>
+            </button>
+          ) : isRunning ? (
             <button
               onClick={handleStop}
               disabled={loading}
               className="w-full py-2.5 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 rounded-xl font-semibold text-xs flex items-center justify-center gap-2 transition"
+              title="Smart Pause: menyelesaikan window aktif lalu simpan riwayat"
             >
               <Square className="w-4 h-4 fill-current" />
-              <span>Jeda / Hentikan Hunter</span>
+              <span>Jeda Hunter</span>
             </button>
           ) : (
             <div className="flex items-center gap-2">

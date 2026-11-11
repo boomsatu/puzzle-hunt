@@ -16,6 +16,7 @@ export interface Puzzle {
 export type HunterStatus =
   | 'Idle'
   | 'Running'
+  | 'Pausing'
   | 'Paused'
   | 'SolvedByUs'
   | 'SolvedByOther'

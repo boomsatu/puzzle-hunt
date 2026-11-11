@@ -50,6 +50,7 @@ pub fn create_router(manager: SharedManager) -> Router {
         // Hunt Control (Tokio Background Worker)
         .route("/api/hunt/:number/start", post(start_hunt))
         .route("/api/hunt/:number/stop", post(stop_hunt))
+        .route("/api/hunt/:number/force_stop", post(force_stop_hunt))
         .route("/api/hunt/:number/status", get(hunt_status))
         .route("/api/hunt/status", get(all_hunt_status))
         // Found Keys (PostgreSQL)
@@ -313,8 +314,22 @@ async fn stop_hunt(
     Path(number): Path<i32>,
     State(manager): State<SharedManager>,
 ) -> Json<Value> {
-    manager.stop(number);
-    Json(json!({ "success": true, "message": format!("Hunt puzzle #{number} dijeda/dihentikan") }))
+    manager.smart_pause(number);
+    Json(json!({
+        "success": true,
+        "message": format!("Smart Pause diaktifkan: menunggu worker puzzle #{number} menyelesaikan window aktif dan menyimpan riwayat ke database")
+    }))
+}
+
+async fn force_stop_hunt(
+    Path(number): Path<i32>,
+    State(manager): State<SharedManager>,
+) -> Json<Value> {
+    manager.force_stop(number);
+    Json(json!({
+        "success": true,
+        "message": format!("Force Stop diaktifkan: worker puzzle #{number} langsung dihentikan")
+    }))
 }
 
 async fn hunt_status(

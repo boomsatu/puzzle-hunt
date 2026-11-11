@@ -18,6 +18,7 @@ import {
   RotateCw,
   Server,
   Sparkles,
+  Loader2,
 } from 'lucide-react';
 import {
   HunterState,
@@ -75,6 +76,7 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
   };
 
   const isRunning = hunter?.status === 'Running';
+  const isPausing = hunter?.status === 'Pausing';
   const isSolved = puzzle.is_solved || hunter?.status === 'SolvedByUs' || hunter?.status === 'SolvedByOther';
 
   // Perhitungan total keys dari perkalian block / window
@@ -253,6 +255,11 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
                 <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
                   <CheckCircle className="w-3.5 h-3.5" /> SOLVED
                 </span>
+              ) : isPausing ? (
+                <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 flex items-center gap-1.5 animate-pulse">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400" />
+                  <span>MENJEDA... (Menyimpan Riwayat Window)</span>
+                </span>
               ) : isRunning ? (
                 <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center gap-1.5 animate-pulse">
                   <span className="w-2 h-2 rounded-full bg-amber-400"></span>
@@ -260,7 +267,7 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
                 </span>
               ) : (
                 <span className="px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-800/80 text-slate-400">
-                  IDLE
+                  {hunter?.status === 'Paused' ? 'PAUSED' : 'IDLE'}
                 </span>
               )}
             </div>
@@ -272,11 +279,11 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
 
         {/* Action Button */}
         <div className="flex items-center gap-3 w-full sm:w-auto">
-          {!isRunning && (
+          {!isRunning && !isPausing && (
             <select
               value={windowBits}
               onChange={(e) => setWindowBits(Number(e.target.value))}
-              disabled={isSolved || loading}
+              disabled={isSolved || loading || isPausing}
               className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-300 focus:outline-none focus:border-amber-500"
             >
               <option value={20}>Window 2^20 (1 Juta keys)</option>
@@ -287,11 +294,21 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
             </select>
           )}
 
-          {isRunning ? (
+          {isPausing ? (
+            <button
+              disabled
+              className="px-5 py-2.5 bg-amber-500/15 text-amber-300 border border-amber-500/30 rounded-xl font-bold text-xs flex items-center gap-2 cursor-wait"
+              title="Smart Pause sedang aktif: worker sedang menyelesaikan window aktif dan menyimpan riwayat ke database"
+            >
+              <Loader2 className="w-4 h-4 animate-spin text-amber-400" />
+              <span>Menyelesaikan Window...</span>
+            </button>
+          ) : isRunning ? (
             <button
               onClick={handleStop}
               disabled={loading}
               className="px-5 py-2.5 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 rounded-xl font-bold text-xs flex items-center gap-2 transition"
+              title="Jeda Cerdas (Smart Pause): Menunggu worker menyelesaikan window aktif dan menyimpan riwayat ke PostgreSQL sebelum berhenti"
             >
               <Square className="w-4 h-4 fill-current" />
               <span>Jeda Hunter</span>

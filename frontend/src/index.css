@@ -22,23 +22,3 @@
 ::-webkit-scrollbar-thumb:hover {
   background: #334155;
 }
-
-/* =========================================================
-   BACKGROUND — GPU-OPTIMIZED (static orbs, no blob animation)
-   ========================================================= */
-
-/* Subtle static cyber grid — no movement, zero GPU cost */
-.bg-cyber-grid {
-  background-image: 
-    linear-gradient(to right, rgba(245, 158, 11, 0.06) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(59, 130, 246, 0.04) 1px, transparent 1px);
-  background-size: 48px 48px;
-}
-
-/* Static orbs — rendered once by GPU then cached, no repaints */
-.orb-static {
-  will-change: auto;
-  contain: strict;
-}
-
-

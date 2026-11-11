@@ -25,8 +25,12 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
     setError(null);
     setLoading(true);
 
+    const activeBackend = (serverUrl || getApiBaseUrl()).trim().replace(/\/+$/, '');
+    setApiBaseUrl(activeBackend);
+    const loginEndpoint = activeBackend ? `${activeBackend}/api/auth/login` : '/api/auth/login';
+
     try {
-      const res = await fetch('/api/auth/login', {
+      const res = await fetch(loginEndpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -44,9 +48,9 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
       } else {
         setError(data.error || 'Username atau password salah. Silakan coba lagi.');
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      setError('Gagal menghubungi backend API. Pastikan server Rust aktif di port 3001.');
+      setError(`Gagal menghubungi backend di ${activeBackend || 'lokal'}. Detail: ${err?.message || 'Network Error'}`);
     } finally {
       setLoading(false);
     }
@@ -87,6 +91,24 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
           <p className="text-xs text-slate-500 mt-1 max-w-xs">
             Sistem terproteksi. Masukkan kredensial admin untuk mengakses dashboard dan controller puzzle.
           </p>
+        </div>
+
+        {/* Active Target Backend Pill */}
+        <div className="mb-4 px-3 py-2 bg-slate-950/80 border border-slate-800 rounded-xl flex items-center justify-between text-xs">
+          <div className="flex items-center gap-2 overflow-hidden">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0 animate-pulse" />
+            <span className="text-slate-400 text-[11px] shrink-0">Engine:</span>
+            <span className="text-amber-300 font-mono text-[11px] truncate">
+              {serverUrl || getApiBaseUrl() || '(Lokal Relative)'}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowServerConfig(!showServerConfig)}
+            className="text-[10px] text-amber-500 hover:text-amber-300 font-semibold ml-2 underline underline-offset-2 shrink-0 cursor-pointer"
+          >
+            {showServerConfig ? 'Tutup' : 'Ubah Alamat'}
+          </button>
         </div>
 
         {/* Error Alert */}
@@ -189,11 +211,35 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
                 type="text"
                 value={serverUrl}
                 onChange={(e) => handleServerSave(e.target.value)}
-                placeholder="https://gpu-engine-one.bariscode.my.id"
+                placeholder="https://local-server.bariscode.my.id"
                 className="w-full bg-slate-900 border border-slate-700/80 rounded-lg px-2.5 py-1.5 text-xs text-amber-300 placeholder-slate-600 focus:outline-none focus:border-amber-500 font-mono"
               />
+              <div className="flex flex-wrap gap-1.5 pt-1">
+                <span className="text-[10px] text-slate-500 self-center">Pilihan cepat:</span>
+                <button
+                  type="button"
+                  onClick={() => handleServerSave('https://local-server.bariscode.my.id')}
+                  className="px-2 py-0.5 bg-slate-900 hover:bg-slate-800 text-[10px] text-amber-400 rounded border border-slate-700 transition cursor-pointer"
+                >
+                  local-server (port 3001)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleServerSave('https://gpu-engine-one.bariscode.my.id')}
+                  className="px-2 py-0.5 bg-slate-900 hover:bg-slate-800 text-[10px] text-slate-300 rounded border border-slate-700 transition cursor-pointer"
+                >
+                  gpu-engine-one
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleServerSave('')}
+                  className="px-2 py-0.5 bg-slate-900 hover:bg-slate-800 text-[10px] text-slate-400 rounded border border-slate-700 transition cursor-pointer"
+                >
+                  Reset
+                </button>
+              </div>
               <p className="text-[10px] text-slate-500">
-                Kosongkan jika menggunakan proxy lokal (port 5173). Isi jika frontend di-hosting di Vercel.
+                Alamat engine disimpan di browser lokal (localStorage). Bisa diganti kapan saja.
               </p>
             </div>
           )}

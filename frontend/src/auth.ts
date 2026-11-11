@@ -7,21 +7,21 @@ const BACKEND_URL_KEY = 'puzzle_backend_url';
 /**
  * Mendapatkan basis URL API backend.
  * Prioritas:
- * 1. Environment variable Vite: `import.meta.env.VITE_API_URL` (misal diset di Vercel: http://IP_GPU:3001)
- * 2. Manual setting di localStorage: `puzzle_backend_url` (bisa diubah via UI)
+ * 1. Manual setting di localStorage: `puzzle_backend_url` (PRIORITAS UTAMA - user override selalu menang)
+ * 2. Environment variable Vite: `import.meta.env.VITE_API_URL` (Default jika belum ada override)
  * 3. Kosong (string kosong "") -> fallback ke relative path (untuk mode lokal/proxy)
  */
 export function getApiBaseUrl(): string {
-  // 1. Env variable dari Vite/Vercel
-  const envUrl = (import.meta.env.VITE_API_URL as string | undefined)?.trim();
-  if (envUrl) {
-    return envUrl.replace(/\/+$/, '');
-  }
-
-  // 2. Manual URL dari localStorage
+  // 1. Manual URL dari localStorage (Prioritas TERTINGGI agar input user di UI selalu dipakai)
   const localUrl = localStorage.getItem(BACKEND_URL_KEY)?.trim();
   if (localUrl) {
     return localUrl.replace(/\/+$/, '');
+  }
+
+  // 2. Env variable dari Vite/Vercel (Default jika user belum mengubah)
+  const envUrl = (import.meta.env.VITE_API_URL as string | undefined)?.trim();
+  if (envUrl) {
+    return envUrl.replace(/\/+$/, '');
   }
 
   // 3. Fallback relative

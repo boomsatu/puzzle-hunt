@@ -23,6 +23,8 @@ import {
   ChevronRight,
   Layers,
   Sparkles,
+  LogOut,
+  Loader2,
 } from 'lucide-react';
 import { Puzzle, HunterState, FoundKey, SweepTimelineEvent, formatKeysSpeed, formatCompactKeys } from './types';
 import { PuzzleCard } from './components/PuzzleCard';
@@ -32,6 +34,8 @@ import { CelebrationModal } from './components/CelebrationModal';
 import { PuzzleDetailPage } from './components/PuzzleDetailPage';
 import { TelegramModal } from './components/TelegramModal';
 import { AnimatedBackground } from './components/AnimatedBackground';
+import { LoginPage } from './components/LoginPage';
+import { verifyCurrentToken, clearAuthToken, getAuthToken, getAuthUser } from './auth';
 
 export type PubkeyFilter = 'all' | 'with_pubkey' | 'no_pubkey';
 export type ViewMode = 'grid' | 'table';
@@ -49,6 +53,17 @@ export const App: React.FC = () => {
   const [wsConnected, setWsConnected] = useState(false);
   const [lastRefreshed, setLastRefreshed] = useState<Date>(new Date());
   const [copiedAddressId, setCopiedAddressId] = useState<number | null>(null);
+
+  // State Autentikasi Cloud
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [isAuthChecking, setIsAuthChecking] = useState<boolean>(true);
+
+  const handleLogout = () => {
+    if (confirm(`Yakin ingin keluar dari sesi admin (${getAuthUser()})?`)) {
+      clearAuthToken();
+      setIsAuthenticated(false);
+    }
+  };
 
   // State Celebration & Auto-Transfer Real-Time Timeline
   const [timelineEvents, setTimelineEvents] = useState<Record<number, SweepTimelineEvent[]>>({});
@@ -146,19 +161,41 @@ export const App: React.FC = () => {
     setLastRefreshed(new Date());
   };
 
-  // Initial load
+  // Pemeriksaan Sesi Autentikasi Cloud saat Startup
   useEffect(() => {
-    refreshAll();
+    const checkAuth = async () => {
+      const { valid } = await verifyCurrentToken();
+      setIsAuthenticated(valid);
+      setIsAuthChecking(false);
+      if (valid) {
+        refreshAll();
+      }
+    };
+
+    checkAuth();
+
+    // Listener otomatis saat token kedaluwarsa dari respons API (401)
+    const handleExpired = () => {
+      setIsAuthenticated(false);
+    };
+    window.addEventListener('puzzle_auth_expired', handleExpired);
+
+    return () => {
+      window.removeEventListener('puzzle_auth_expired', handleExpired);
+    };
   }, []);
 
   // WebSocket Live Stream Connection (Real-time Progress)
   useEffect(() => {
+    if (!isAuthenticated) return;
+
     let ws: WebSocket | null = null;
     let reconnectTimeout: any = null;
 
     const connectWs = () => {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}/api/ws`;
+      const token = getAuthToken();
+      const wsUrl = `${protocol}//${window.location.host}/api/ws?token=${token || ''}`;
 
       ws = new WebSocket(wsUrl);
 
@@ -223,17 +260,18 @@ export const App: React.FC = () => {
       if (reconnectTimeout) clearTimeout(reconnectTimeout);
       ws?.close();
     };
-  }, []);
+  }, [isAuthenticated]);
 
   // Fallback Polling setiap 5 detik
   useEffect(() => {
+    if (!isAuthenticated) return;
     const timer = setInterval(() => {
       if (!wsConnected) {
         fetchHuntersStatus();
       }
     }, 5000);
     return () => clearInterval(timer);
-  }, [wsConnected]);
+  }, [wsConnected, isAuthenticated]);
 
   // Hitung jumlah puzzle dengan pubkey terbuka vs belum
   const countWithPubkey = puzzles.filter(
@@ -263,6 +301,37 @@ export const App: React.FC = () => {
     (acc, h) => (h.status === 'Running' ? acc + h.keys_per_second : acc),
     0
   );
+
+  // Layar Tunggu Verifikasi Sesi Cloud
+  if (isAuthChecking) {
+    return (
+      <div className="min-h-screen bg-[#070b12] text-slate-100 flex flex-col items-center justify-center p-4">
+        <div className="relative mb-3">
+          <img
+            src="/logo.svg"
+            alt="Puzzle Hunt"
+            className="w-14 h-14 rounded-2xl animate-pulse shadow-lg shadow-amber-500/20 border border-amber-500/30"
+          />
+        </div>
+        <div className="flex items-center gap-2 text-xs text-slate-400">
+          <Loader2 className="w-4 h-4 animate-spin text-amber-400" />
+          <span>Memeriksa Otorisasi Cloud...</span>
+        </div>
+      </div>
+    );
+  }
+
+  // Layar Login jika Belum Terotentikasi
+  if (!isAuthenticated) {
+    return (
+      <LoginPage
+        onLoginSuccess={() => {
+          setIsAuthenticated(true);
+          refreshAll();
+        }}
+      />
+    );
+  }
 
   return (
     <div className="min-h-screen relative text-slate-100 flex flex-col selection:bg-amber-500/30">
@@ -344,6 +413,16 @@ export const App: React.FC = () => {
             >
               <Plus className="w-4 h-4" />
               <span>Tambah Puzzle</span>
+            </button>
+
+            {/* Tombol Logout Admin */}
+            <button
+              onClick={handleLogout}
+              className="px-3 py-2 bg-slate-800/80 hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 border border-slate-700/60 hover:border-rose-500/30 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition"
+              title={`Sesi aktif sebagai: ${getAuthUser()} — Klik untuk keluar`}
+            >
+              <LogOut className="w-4 h-4" />
+              <span className="hidden sm:inline">Keluar</span>
             </button>
           </div>
         </div>

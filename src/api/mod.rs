@@ -19,6 +19,8 @@ use tower_http::cors::{Any, CorsLayer};
 use crate::db::{self, CreatePuzzleDto, UpdatePuzzleDto};
 use crate::manager::HuntManager;
 
+pub mod auth;
+
 pub type SharedManager = Arc<HuntManager>;
 
 #[derive(Debug, Deserialize)]
@@ -36,8 +38,11 @@ pub fn create_router(manager: SharedManager) -> Router {
         .allow_origin(Any);
 
     Router::new()
-        // Health check & Config
+        // Health check & Autentikasi Publik
         .route("/api/health", get(health))
+        .route("/api/auth/login", post(auth::login_handler))
+        .route("/api/auth/verify", get(auth::verify_handler))
+        // System Config
         .route("/api/config", get(get_config))
         // Puzzle CRUD (PostgreSQL)
         .route("/api/puzzles", get(list_puzzles))
@@ -62,6 +67,7 @@ pub fn create_router(manager: SharedManager) -> Router {
         // WebSocket Live Stream
         .route("/api/ws", get(ws_handler))
         .route("/ws", get(ws_handler))
+        .layer(axum::middleware::from_fn(auth::auth_middleware))
         .layer(cors)
         .with_state(manager)
 }

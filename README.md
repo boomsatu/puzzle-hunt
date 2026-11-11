@@ -120,6 +120,9 @@ Available configuration options:
 | `TELEGRAM_BOT_TOKEN` | Telegram Bot token from [@BotFather](https://t.me/BotFather) (Optional) | `123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ` |
 | `TELEGRAM_CHAT_ID` | Telegram chat ID to receive instant alerts (Optional) | `987654321` |
 | `HUNT_MODE` | **Execution Mode**: `local` (PC), `vps` (Cloud Server), or `gpu` (NVIDIA CUDA) | `local` |
+| `ADMIN_USERNAME` | Cloud Admin dashboard username | `admin` |
+| `ADMIN_PASSWORD` | Cloud Admin dashboard password | `adminpassword123` |
+| `AUTH_SECRET` | Secret key for HMAC-SHA256 Bearer Token signing | `super_secret_puzzle_hunt_auth_key_2026` |
 
 ---
 

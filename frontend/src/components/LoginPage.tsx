@@ -189,7 +189,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
                 type="text"
                 value={serverUrl}
                 onChange={(e) => handleServerSave(e.target.value)}
-                placeholder="misal: http://123.45.67.89:3001"
+                placeholder="https://gpu-engine-one.bariscode.my.id"
                 className="w-full bg-slate-900 border border-slate-700/80 rounded-lg px-2.5 py-1.5 text-xs text-amber-300 placeholder-slate-600 focus:outline-none focus:border-amber-500 font-mono"
               />
               <p className="text-[10px] text-slate-500">

@@ -32,3 +32,4 @@ echo ""
 echo -e "${CYAN}Langkah selanjutnya untuk kirim ke GPU Hosting:${NC}"
 echo "   scp $BACKUP_FILE user@<IP_GPU>:/path/to/puzzle-hunt/data/"
 echo "   Lalu di server GPU jalankan: bash import_db.sh"
+

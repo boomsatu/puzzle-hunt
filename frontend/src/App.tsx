@@ -35,7 +35,7 @@ import { PuzzleDetailPage } from './components/PuzzleDetailPage';
 import { TelegramModal } from './components/TelegramModal';
 import { AnimatedBackground } from './components/AnimatedBackground';
 import { LoginPage } from './components/LoginPage';
-import { verifyCurrentToken, clearAuthToken, getAuthToken, getAuthUser } from './auth';
+import { verifyCurrentToken, clearAuthToken, getAuthToken, getAuthUser, getApiBaseUrl } from './auth';
 
 export type PubkeyFilter = 'all' | 'with_pubkey' | 'no_pubkey';
 export type ViewMode = 'grid' | 'table';
@@ -193,9 +193,16 @@ export const App: React.FC = () => {
     let reconnectTimeout: any = null;
 
     const connectWs = () => {
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const baseUrl = getApiBaseUrl();
+      let wsBase = '';
+      if (baseUrl) {
+        wsBase = baseUrl.replace(/^http:/i, 'ws:').replace(/^https:/i, 'wss:');
+      } else {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        wsBase = `${protocol}//${window.location.host}`;
+      }
       const token = getAuthToken();
-      const wsUrl = `${protocol}//${window.location.host}/api/ws?token=${token || ''}`;
+      const wsUrl = `${wsBase}/api/ws?token=${token || ''}`;
 
       ws = new WebSocket(wsUrl);
 

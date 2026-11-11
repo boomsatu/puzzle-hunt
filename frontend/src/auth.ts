@@ -1,7 +1,41 @@
-//! Authentication Utilities & Global API Interceptor for Cloud Security
+//! Authentication Utilities & Global API Interceptor for Cloud Security & Vercel Support
 
 const TOKEN_KEY = 'puzzle_auth_token';
 const USER_KEY = 'puzzle_auth_user';
+const BACKEND_URL_KEY = 'puzzle_backend_url';
+
+/**
+ * Mendapatkan basis URL API backend.
+ * Prioritas:
+ * 1. Environment variable Vite: `import.meta.env.VITE_API_URL` (misal diset di Vercel: http://IP_GPU:3001)
+ * 2. Manual setting di localStorage: `puzzle_backend_url` (bisa diubah via UI)
+ * 3. Kosong (string kosong "") -> fallback ke relative path (untuk mode lokal/proxy)
+ */
+export function getApiBaseUrl(): string {
+  // 1. Env variable dari Vite/Vercel
+  const envUrl = (import.meta.env.VITE_API_URL as string | undefined)?.trim();
+  if (envUrl) {
+    return envUrl.replace(/\/+$/, '');
+  }
+
+  // 2. Manual URL dari localStorage
+  const localUrl = localStorage.getItem(BACKEND_URL_KEY)?.trim();
+  if (localUrl) {
+    return localUrl.replace(/\/+$/, '');
+  }
+
+  // 3. Fallback relative
+  return '';
+}
+
+export function setApiBaseUrl(url: string): void {
+  const clean = url.trim().replace(/\/+$/, '');
+  if (clean) {
+    localStorage.setItem(BACKEND_URL_KEY, clean);
+  } else {
+    localStorage.removeItem(BACKEND_URL_KEY);
+  }
+}
 
 export function getAuthToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
@@ -32,7 +66,10 @@ export async function verifyCurrentToken(): Promise<{ valid: boolean; username?:
   if (!token) return { valid: false };
 
   try {
-    const res = await fetch('/api/auth/verify', {
+    const baseUrl = getApiBaseUrl();
+    const endpoint = baseUrl ? `${baseUrl}/api/auth/verify` : '/api/auth/verify';
+    
+    const res = await fetch(endpoint, {
       headers: {
         Authorization: `Bearer ${token}`,
       },
@@ -50,14 +87,16 @@ export async function verifyCurrentToken(): Promise<{ valid: boolean; username?:
 }
 
 /**
- * Global Interceptor: Menyisipkan header Authorization Bearer secara otomatis
- * ke seluruh pemanggilan fetch() di aplikasi.
+ * Global Interceptor:
+ * 1. Otomatis menambahkan Base URL backend jika request diawali dengan '/api' (mendukung deployment Vercel)
+ * 2. Menyisipkan header Authorization Bearer secara otomatis ke seluruh pemanggilan fetch()
  */
 export function setupAuthInterceptor(): void {
   const originalFetch = window.fetch;
 
   window.fetch = async function (input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
     const token = getAuthToken();
+    const baseUrl = getApiBaseUrl();
     const headers = new Headers(init?.headers || {});
 
     // Selalu sisipkan token jika tersedia dan belum di-set manual
@@ -65,18 +104,28 @@ export function setupAuthInterceptor(): void {
       headers.set('Authorization', `Bearer ${token}`);
     }
 
-    const res = await originalFetch(input, { ...init, headers });
+    // Resolusi URL backend untuk Vercel (jika baseUrl diset dan input adalah relative path /api)
+    let finalInput = input;
+    if (baseUrl) {
+      if (typeof input === 'string' && input.startsWith('/api')) {
+        finalInput = `${baseUrl}${input}`;
+      } else if (input instanceof Request && input.url.startsWith('/api')) {
+        finalInput = new Request(`${baseUrl}${input.url}`, input);
+      }
+    }
+
+    const res = await originalFetch(finalInput, { ...init, headers });
 
     // Jika menerima 401 Unauthorized dan bukan di endpoint login, reset sesi
     if (res.status === 401) {
-      const url =
+      const urlStr =
         typeof input === 'string'
           ? input
           : input instanceof URL
           ? input.toString()
           : input.url;
 
-      if (!url.includes('/api/auth/login')) {
+      if (!urlStr.includes('/api/auth/login')) {
         clearAuthToken();
         window.dispatchEvent(new Event('puzzle_auth_expired'));
       }
@@ -85,4 +134,3 @@ export function setupAuthInterceptor(): void {
     return res;
   };
 }
-

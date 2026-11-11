@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { Lock, User, ShieldCheck, AlertCircle, Loader2, Eye, EyeOff, KeyRound } from 'lucide-react';
-import { setAuthToken, setAuthUser } from '../auth';
+import { Lock, User, ShieldCheck, AlertCircle, Loader2, Eye, EyeOff, KeyRound, Server, ChevronDown, ChevronUp } from 'lucide-react';
+import { setAuthToken, setAuthUser, getApiBaseUrl, setApiBaseUrl } from '../auth';
 
 interface LoginPageProps {
   onLoginSuccess: () => void;
@@ -12,6 +12,13 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showServerConfig, setShowServerConfig] = useState(false);
+  const [serverUrl, setServerUrl] = useState(getApiBaseUrl() || '');
+
+  const handleServerSave = (val: string) => {
+    setServerUrl(val);
+    setApiBaseUrl(val);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -158,6 +165,39 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
             )}
           </button>
         </form>
+
+        {/* Backend Host Config (Untuk Vercel / Cloud Remote Hosting) */}
+        <div className="mt-4 pt-3 border-t border-slate-800/60">
+          <button
+            type="button"
+            onClick={() => setShowServerConfig(!showServerConfig)}
+            className="w-full flex items-center justify-between text-xs text-slate-400 hover:text-amber-400 transition"
+          >
+            <span className="flex items-center gap-1.5">
+              <Server className="w-3.5 h-3.5 text-amber-500" />
+              <span>Target Backend API URL</span>
+            </span>
+            {showServerConfig ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+          </button>
+
+          {showServerConfig && (
+            <div className="mt-2 p-3 bg-slate-950/90 rounded-xl border border-slate-800 text-xs space-y-2">
+              <label className="text-slate-400 block text-[11px]">
+                Alamat IP / Domain GPU Cloud Backend:
+              </label>
+              <input
+                type="text"
+                value={serverUrl}
+                onChange={(e) => handleServerSave(e.target.value)}
+                placeholder="misal: http://123.45.67.89:3001"
+                className="w-full bg-slate-900 border border-slate-700/80 rounded-lg px-2.5 py-1.5 text-xs text-amber-300 placeholder-slate-600 focus:outline-none focus:border-amber-500 font-mono"
+              />
+              <p className="text-[10px] text-slate-500">
+                Kosongkan jika menggunakan proxy lokal (port 5173). Isi jika frontend di-hosting di Vercel.
+              </p>
+            </div>
+          )}
+        </div>
 
         {/* Security Note Footer */}
         <div className="mt-6 pt-4 border-t border-slate-800/80 text-center space-y-1 text-[11px] text-slate-500">

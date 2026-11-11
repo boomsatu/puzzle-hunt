@@ -15,6 +15,10 @@ FOUND_BTC_*.txt
 *.priv
 err.txt
 out.txt
+data/puzzle_hunt_backup.sql
+data/*.zip
+data/*.tar.gz
+*.sql.gz
 
 # Node modules & frontend artifacts
 /frontend/node_modules

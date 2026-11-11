@@ -7,70 +7,70 @@
 [![TailwindCSS](https://img.shields.io/badge/Tailwind-3-38B2AC.svg?style=flat-square&logo=tailwind-css)](https://tailwindcss.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](https://opensource.org/licenses/MIT)
 
-**Bitcoin Puzzle Hunter** adalah platform pemecah [Bitcoin Challenge Transaction Puzzles](https://blockchain.com) berkinerja tinggi kelas enterprise. Dibangun dari awal menggunakan **Rust** murni dengan operasi titik kurva eliptik (*secp256k1*), akselerasi multi-thread dinamis, basis data **PostgreSQL** untuk pelacakan anti-duplikasi permanen, arsitektur multi-mode (`local`, `vps`, `gpu`), serta **Web UI Dashboard** real-time interaktif berbasis React & WebSockets.
+**Bitcoin Puzzle Hunter** is an enterprise-grade, high-performance platform designed specifically to solve the [Bitcoin Challenge Transaction Puzzles](https://blockchain.com). Built from scratch in pure **Rust** with native elliptic curve operations (*secp256k1*), dynamic multi-thread scaling, **PostgreSQL** database integration for permanent deduplication, multi-device runtime execution (`local`, `vps`, `gpu`), and a real-time interactive **Web UI Dashboard** powered by React and WebSockets.
 
 ---
 
-## ⚡ Fitur Utama & Keunggulan
+## ⚡ Key Features & Highlights
 
-### 1. ⚙️ Fleksibilitas Mode Eksekusi (`HUNT_MODE`)
-Sistem mendukung tiga mode komputasi yang dapat disetel langsung melalui file `.env`:
-- **Mode `local` (Default - PC Desktop)**:
-  - Mengalokasikan resource secara seimbang.
-  - Secara otomatis **menyisakan 2 core CPU** untuk OS, browser, PostgreSQL, dan background tasks (maksimal 8 worker threads per puzzle). Komputer tetap nyaman digunakan untuk bekerja/browsing tanpa freeze.
-- **Mode `vps` (Headless Linux Cloud Server)**:
-  - Dioptimalkan khusus untuk server cloud / VPS (Ubuntu/Debian).
-  - Menyisakan **hanya 1 core** untuk OS + PostgreSQL + Web API, sisa seluruh core CPU (misal: 7 dari 8 core, 15 dari 16 core) didedikasikan penuh untuk pemecahan puzzle.
-- **Mode `gpu` / `cuda` (Akselerasi Hardware NVIDIA GPU)**:
-  - Mendeteksi ketersediaan NVIDIA GPU dan versi driver secara otomatis via query `nvidia-smi` (Nama GPU, Total VRAM, Driver Version).
-  - Mendukung deteksi dan integrasi solver CUDA biner eksternal (`kangaroo-cuda`, `keyhunt`, `bitcrack`) maupun pipeline integrated GPU dispatch.
-  - Memiliki fitur *fail-safe automatic fallback*: bila mode GPU diaktifkan di host tanpa GPU, sistem secara cerdas beralih ke alokasi maksimal mode VPS.
-  - Siap dideploy pada layanan GPU Cloud Hosting seperti **Vast.ai, RunPod, AWS EC2 G-Series, Hostinger GPU**, dll.
+### 1. ⚙️ Flexible Execution Runtime Modes (`HUNT_MODE`)
+Tailor CPU/GPU hardware utilization directly via the `.env` configuration file:
+- **`local` Mode (Default - Desktop PC)**:
+  - Balanced resource allocation.
+  - Automatically **reserves 2 CPU cores** for the operating system, web browser, PostgreSQL, and background tasks (maximum 8 worker threads per puzzle). Ensures your desktop remains smooth and responsive without freezing.
+- **`vps` Mode (Headless Linux Cloud Server)**:
+  - Specially optimized for cloud VPS instances (Ubuntu/Debian).
+  - Reserves **only 1 core** for OS + PostgreSQL + Web API, dedicating all remaining cores (e.g., 7 out of 8 cores, 15 out of 16 cores) to puzzle cracking at maximum throughput.
+- **`gpu` / `cuda` Mode (NVIDIA Hardware Acceleration)**:
+  - Automatically detects NVIDIA GPU presence and driver version via `nvidia-smi` (GPU name, total VRAM, driver version).
+  - Supports external CUDA accelerator solvers (`kangaroo-cuda`, `keyhunt`, `bitcrack`) as well as integrated GPU dispatch pipelines.
+  - Features an **automatic fail-safe fallback**: if GPU mode is specified on a host without CUDA hardware, the engine automatically falls back to maximum VPS multi-core mode.
+  - Ready for cloud GPU rental platforms such as **Vast.ai, RunPod, AWS EC2 G-Series, Hostinger GPU**, etc.
 
-### 2. ⏸️ Jeda Hunter Smart (*Graceful Smart Pause*)
-- Berbeda dari sistem pembunuh thread paksa yang rentan merusak data, fitur **Jeda Hunter Smart** memastikan **Zero Data Loss**.
-- Saat pengguna mengklik tombol **"Jeda Hunter"**, status hunter berubah menjadi `Pausing` (*"MENJEDA... Menyimpan Riwayat Window"*).
-- Worker yang sedang berjalan dibiarkan menyelesaikan komputasi window aktifnya hingga tuntas.
-- Seluruh riwayat window dan metrik langsung disimpan secara aman ke database PostgreSQL (`scanned_windows`).
-- Setelah tersimpan, status berubah menjadi `Paused` dan worker berhenti dengan tertib.
-- Tersedia endpoint darurat `POST /api/hunt/:number/force_stop` jika diperlukan penghentian seketika.
+### 2. ⏸️ Smart Graceful Pause (*Zero Data Loss*)
+- Unlike brute-force process termination that risks database corruption and wasted cycles, **Smart Graceful Pause** guarantees **Zero Data Loss**.
+- When the user clicks **"Pause Hunter"**, the hunter state transitions to `Pausing` (*"PAUSING... Finishing Current Window"*).
+- Active workers complete their in-progress window computations naturally.
+- All scanned window ranges and metrics are safely committed to PostgreSQL (`scanned_windows`).
+- Once persisted, the state transitions to `Paused` and workers idle cleanly.
+- An emergency endpoint (`POST /api/hunt/:number/force_stop`) remains available for immediate instant termination when required.
 
 ### 3. 🎉 Real-Time Celebration & Auto-Transfer Timeline
-- **Modal Perayaan Kemenangan Interaktif**: Dilengkapi dengan animasi partikel confetti dinamis saat sebuah private key berhasil ditemukan.
-- **Efek Audio Fanfare Sintesis**: Menggunakan **Web Audio API** native untuk memutar melodi kemenangan kemenangan arpeggio (*C-E-G-C-E-G-C*), bekerja instan di browser tanpa memerlukan file aset audio eksternal.
-- **Pelacakan Timeline Real-Time (WebSocket Live)**: Backend Rust menyiarkan setiap tahapan proses auto-transfer secara langsung ke frontend:
-  1. 🔑 **Kunci Ditemukan**: Penemuan private key, konversi ke format WIF, dan verifikasi alamat.
-  2. 📝 **Penyiapan Transaksi Instan Sweep**: Mengambil UTXO dan menyusun *raw transaction*.
-  3. ✍️ **Penandatanganan Digital**: Penandatanganan cryptographic signature (*secp256k1*).
-  4. 📡 **Siaran ke Jaringan Bitcoin**: Pengiriman transaksi melalui RPC node publik terdistribusi (`bitcoin-rpc.publicnode.com`).
-  5. ⛏️ **Mempool & Konfirmasi Blok**: Menampilkan TxID resmi dengan link langsung ke Blockchain.com explorer.
-- **Fitur Simulasi**: Tombol *"Simulasikan Kemenangan"* di halaman detail untuk menguji respons UI, audio, dan alur timeline kapan saja.
+- **Interactive Victory Modal**: Featuring dynamic confetti animations whenever a private key is discovered.
+- **Synthesized Audio Fanfare**: Uses the native **Web Audio API** to generate a melodic victory fanfare (*C-E-G-C-E-G-C* arpeggio) directly in the browser—zero external audio files or third-party dependencies required.
+- **Live WebSocket Event Pipeline**: The Rust backend streams every milestone of the auto-transfer sweep in real-time:
+  1. 🔑 **Key Found & Verified**: Private key discovered, converted to WIF, and validated against target public key / address.
+  2. 📝 **Instant Sweep Preparation**: UTXO lookup and raw transaction construction.
+  3. ✍️ **Cryptographic Signing**: Secp256k1 digital signature generation.
+  4. 📡 **Network Broadcast**: Transaction broadcast via public Bitcoin JSON-RPC nodes (`bitcoin-rpc.publicnode.com`).
+  5. ⛏️ **Mempool & Block Confirmation**: Real-time TxID generation with direct links to the Blockchain.com explorer.
+- **Simulation Mode**: A *"Simulate Celebration"* button in the puzzle detail view allows testing the entire UI, audio, and timeline pipeline at any time.
 
-### 4. 🦘 Dual-Engine Hunting Berkinerja Tinggi
+### 4. 🦘 High-Performance Dual-Engine Architecture
 - **Pollard's Kangaroo Engine $O(\sqrt{N})$**:
-  - Dikhususkan untuk puzzle yang memiliki Public Key terbuka (#140, #145, #150, #155, #160).
-  - Mampu memeriksa window berukuran **1 Miliar kunci hanya dalam ~1,5 detik** per thread.
-- **Address Hash160 Scanner Engine**:
-  - Untuk puzzle yang public key-nya belum terekspos (#66, #67, dll).
-  - Melakukan pemindaian sekuensial rapat ($P_{i+1} = P_i + G$) berbasis hash160 berkecepatan tinggi.
+  - Specialized for puzzles with exposed uncompressed/compressed Public Keys (#140, #145, #150, #155, #160).
+  - Capable of searching a **1 Billion key window in ~1.5 seconds** per thread.
+- **Sequential Address Hash160 Scanner Engine**:
+  - Designed for puzzles where the public key has never been revealed (#66, #67, etc.).
+  - Executes rapid sequential point addition ($P_{i+1} = P_i + G$) with hash160 comparison.
 
-### 5. 🛡️ Anti-Duplikasi Permanen (PostgreSQL)
-- Setiap rentang window (`[w_start, w_end]`) yang telah diperiksa dicatat ke PostgreSQL dengan index B-Tree.
-- Pemilihan rentang acak (*Random Jump Monte Carlo*) menjamin **100% daya komputasi selalu mengeksplorasi ruang kunci baru**, tanpa membuang siklus komputasi pada window yang pernah discan sebelumnya.
+### 5. 🛡️ Permanent Deduplication (PostgreSQL)
+- Every scanned window range (`[w_start, w_end]`) is indexed with B-Tree tables in PostgreSQL.
+- Pseudo-random Monte Carlo jump selection ensures **100% of compute cycles explore virgin key space**, eliminating duplicate scanning.
 
-### 6. 🚀 Auto-Sweep Instan Anti Front-Running
-- Alamat tujuan penarikan otomatis dikonfigurasi melalui `.env` dan terkunci permanen di level backend.
-- Menggunakan **High Priority Miner Fee** (2x `estimatesmartfee(1)` atau minimal 35 sat/vB) untuk memastikan transaksi diproses miner di blok pertama tanpa risiko disalip bot front-runner.
+### 6. 🚀 Instant Anti Front-Running Auto-Sweep
+- Destination payout address is configured in `.env` and locked permanently at the backend level.
+- Applies **High Priority Miner Fees** (2x `estimatesmartfee(1)` or minimum 35 sat/vB) to ensure inclusion in the very next mined block, neutralizing front-running mempool bots.
 
-### 7. 📊 Tampilan Dashboard Modern & Terisolasi
-- **Mode Tampilan Ganda**: Beralih antara **Grid View** (tampilan kartu visual) dan **Table View** (tampilan tabel ringkas), preferensi tersimpan di `localStorage`.
-- **Filter Cerdas**: Filter cepat antara *Semua Puzzle*, *Pubkey Ada (Kangaroo)*, dan *Pubkey Belum Ada (Address Mode)*.
-- **Halaman Detail Terisolasi**: Panel metrik global hanya muncul di beranda utama; halaman detail menyajikan visualisasi posisi titik lompatan multi-thread (*Core Jump Positions*), metrik live, log aktivitas, dan riwayat window yang bersih.
-- **Presisi Matematika 160-bit**: Format persentase desimal presisi tinggi menggunakan BigInt tanpa notasi ilmiah e-minus.
+### 7. 📊 Modern, Distraction-Free Web Dashboard
+- **Dual Display Modes**: Toggle seamlessly between **Grid View** (visual cards) and **Table View** (compact tabular data), with preference saved to `localStorage`.
+- **Smart Filters**: Instant switching between *All Puzzles*, *Pubkey Exposed (Kangaroo $O(\sqrt{N})$)*, and *No Pubkey (Address Mode)*.
+- **Isolated Detail View**: Global dashboard metrics remain on the home overview; individual puzzle pages focus exclusively on live hunt progress, multi-thread jump positions (*Core Jump Positions*), audit logs, and historical window data.
+- **160-Bit High-Precision Math**: Accurate BigInt calculations without scientific e-notation in percentage and key space metrics.
 
 ---
 
-## 🏗️ Arsitektur Sistem
+## 🏗️ System Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -99,45 +99,45 @@ Sistem mendukung tiga mode komputasi yang dapat disetel langsung melalui file `.
 
 ---
 
-## ⚙️ Konfigurasi Environment (`.env`)
+## ⚙️ Environment Configuration (`.env`)
 
-Salin template `.env.example` ke `.env`:
+Copy the `.env.example` template into `.env`:
 
 ```bash
 cp .env.example .env      # Linux / macOS
 copy .env.example .env    # Windows PowerShell / CMD
 ```
 
-Berikut parameter konfigurasi yang tersedia:
+Available configuration options:
 
-| Variabel | Deskripsi | Nilai Contoh |
+| Variable | Description | Example / Default |
 |---|---|---|
-| `DATABASE_URL` | Koneksi PostgreSQL (Docker / Local) | `postgres://postgres:postgrespassword@localhost:5432/puzzle_hunt` |
-| `PORT` | Port server REST API & WebSocket Axum | `3001` |
-| `HOST` | Host binding interface server | `0.0.0.0` |
-| `DEFAULT_DESTINATION_ADDRESS` | Alamat Bitcoin tujuan sweep instan (Terkunci permanen) | `bc1q8c0uc752amr7v4amswn5vhes37a6ffy4ral6ek` |
-| `BITCOIN_RPC_URL` | Endpoint node Bitcoin JSON-RPC untuk broadcast raw tx | `https://bitcoin-rpc.publicnode.com` |
-| `TELEGRAM_BOT_TOKEN` | Token Bot Telegram dari [@BotFather](https://t.me/BotFather) (Opsional) | `123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ` |
-| `TELEGRAM_CHAT_ID` | Chat ID Telegram penerima notifikasi (Opsional) | `987654321` |
-| `HUNT_MODE` | **Mode Komputasi**: `local` (PC), `vps` (Server Cloud), `gpu` (NVIDIA CUDA) | `local` |
+| `DATABASE_URL` | PostgreSQL connection string (Docker or local) | `postgres://postgres:postgrespassword@localhost:5432/puzzle_hunt` |
+| `PORT` | REST API & WebSocket server port | `3001` |
+| `HOST` | Server host binding interface | `0.0.0.0` |
+| `DEFAULT_DESTINATION_ADDRESS` | Permanent Bitcoin address for instant sweep payouts | `bc1q8c0uc752amr7v4amswn5vhes37a6ffy4ral6ek` |
+| `BITCOIN_RPC_URL` | Bitcoin JSON-RPC node endpoint for raw transaction broadcast | `https://bitcoin-rpc.publicnode.com` |
+| `TELEGRAM_BOT_TOKEN` | Telegram Bot token from [@BotFather](https://t.me/BotFather) (Optional) | `123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ` |
+| `TELEGRAM_CHAT_ID` | Telegram chat ID to receive instant alerts (Optional) | `987654321` |
+| `HUNT_MODE` | **Execution Mode**: `local` (PC), `vps` (Cloud Server), or `gpu` (NVIDIA CUDA) | `local` |
 
 ---
 
-## 🚀 Panduan Memulai Cepat
+## 🚀 Quick Start Guide
 
-### 1. Prasyarat Sistem
+### 1. Prerequisites
 - **Rust Toolchain**: v1.75+ ([rustup.rs](https://rustup.rs/))
-- **Docker & Docker Compose**: Untuk menjalankan instance PostgreSQL ([docker.com](https://www.docker.com/))
+- **Docker & Docker Compose**: For running the PostgreSQL instance ([docker.com](https://www.docker.com/))
 - **Node.js**: v18+ & npm ([nodejs.org](https://nodejs.org/))
-- *(Opsional)* **NVIDIA GPU Driver & CUDA Toolkit**: Diperlukan jika menggunakan `HUNT_MODE=gpu`
+- *(Optional)* **NVIDIA GPU Driver & CUDA Toolkit**: Required only if using `HUNT_MODE=gpu`
 
-### 2. Kloning Repositori
+### 2. Clone the Repository
 ```bash
 git clone https://github.com/boomsatu/puzzle-hunt.git
 cd puzzle-hunt
 ```
 
-### 3. Konfigurasi File Environment
+### 3. Configure the Environment
 ```bash
 # Windows
 copy .env.example .env
@@ -145,71 +145,71 @@ copy .env.example .env
 # Linux / macOS
 cp .env.example .env
 ```
-*Buka `.env` dan atur `HUNT_MODE` sesuai mesin Anda (`local`, `vps`, atau `gpu`), serta tentukan alamat Bitcoin tujuan transfer Anda.*
+*Open `.env` and set `HUNT_MODE` to match your hardware (`local`, `vps`, or `gpu`), and configure your destination Bitcoin address.*
 
-### 4. Nyalakan Database PostgreSQL
-Jalankan service database menggunakan Docker Compose:
+### 4. Launch PostgreSQL Database
+Start the database service using Docker Compose:
 ```bash
 docker compose up -d postgres
 ```
-*Database PostgreSQL akan berjalan di port `5432` dengan tabel dan relasi yang termigrasi otomatis saat backend pertama kali start.*
+*PostgreSQL will be available on port `5432`. Schema migrations and initial puzzle data are applied automatically when the backend launches.*
 
-### 5. Kompilasi & Jalankan Backend Rust
-Gunakan optimasi level rilis penuh (`--release`) dengan LTO:
+### 5. Compile & Run Rust Backend
+Build with release-level optimizations (`--release`) and LTO:
 ```bash
 cargo build --release
 
-# Menjalankan binary server
+# Run executable
 # Windows:
 .\target\release\puzzle-hunt.exe
 
 # Linux / macOS:
 ./target/release/puzzle-hunt
 ```
-*Backend API & WebSocket server akan aktif di `http://localhost:3001`.*
+*The API and WebSocket server will listen on `http://localhost:3001`.*
 
-### 6. Jalankan Frontend Web Dashboard
-Buka terminal baru di direktori `frontend`:
+### 6. Launch Web Frontend Dashboard
+Open a new terminal window in the `frontend` directory:
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
-*Akses dashboard melalui browser di `http://localhost:5173`.*
+*Access the dashboard in your browser at `http://localhost:5173`.*
 
 ---
 
-## ☁️ Panduan Deploy di Cloud VPS & GPU Hosting
+## ☁️ Deployment Guide: Cloud VPS & GPU Hosting
 
-### A. Deploy di Linux VPS Headless (DigitalOcean / Linode / Contabo / Hetzner)
-1. Atur `.env`:
+### A. Headless Linux VPS (DigitalOcean / Linode / Contabo / Hetzner)
+1. Configure `.env`:
    ```ini
    HUNT_MODE=vps
    HOST=0.0.0.0
    PORT=3001
    ```
-2. Jalankan database: `docker compose up -d postgres`
-3. Kompilasi: `cargo build --release`
-4. Jalankan sebagai background service menggunakan `systemd` atau `tmux`.
-5. Build frontend production: `cd frontend && npm run build` (dapat disajikan langsung via Nginx atau static server).
+2. Start PostgreSQL: `docker compose up -d postgres`
+3. Build backend: `cargo build --release`
+4. Run as a background service via `systemd` or `tmux`.
+5. Build production frontend: `cd frontend && npm run build` (serve with Nginx or any static file server).
 
-### B. Deploy di GPU Cloud (Vast.ai / RunPod / AWS EC2 G4/G5)
-1. Pastikan driver NVIDIA aktif: `nvidia-smi`
-2. Atur `.env`:
+### B. Cloud GPU Hosting (Vast.ai / RunPod / AWS EC2 G4/G5)
+1. Verify NVIDIA drivers: `nvidia-smi`
+2. Configure `.env`:
    ```ini
    HUNT_MODE=gpu
    ```
-3. Saat backend startup, log akan memverifikasi GPU Anda:
+3. On backend startup, the engine will verify your GPU environment:
    ```text
-   🚀 [CUDA ENGINE] NVIDIA CUDA Aktif: NVIDIA GeForce RTX 4090 (VRAM: 24564 MB, Driver: 550.54)
-   ⚡ [CUDA SOLVER] Ditemukan accelerator binary: kangaroo-cuda
+   🚀 [CUDA ENGINE] NVIDIA CUDA Active: NVIDIA GeForce RTX 4090 (VRAM: 24564 MB, Driver: 550.54)
+   ⚡ [CUDA SOLVER] Found accelerator binary: kangaroo-cuda
    ```
 
 ---
 
-## 🧪 Pengujian Unit Test
+## 🧪 Running Unit Tests
 
-Engine telah dilengkapi dengan rangkaian pengujian komprehensif, termasuk pengujian known-answer terhadap **Bitcoin Puzzle #20**:
+The engine includes comprehensive test coverage, including known-answer verification against **Bitcoin Puzzle #20**:
 
 ```bash
 cargo test kangaroo_tests -- --nocapture
@@ -217,14 +217,14 @@ cargo test kangaroo_tests -- --nocapture
 
 ---
 
-## 🔒 Keamanan & Perlindungan
+## 🔒 Security & Privacy
 
-- **Terkunci Permanen**: Alamat tujuan sweep dikonfigurasi melalui `.env` server dan terkunci permanen di memori backend, mencegah manipulasi payload dari browser.
-- **Penyimpanan Lokal**: Seluruh private key yang ditemukan disimpan secara lokal di basis data PostgreSQL internal dan dicadangkan ke log file lokal terisolasi.
-- **Kerahasiaan Kredensial**: File `.env`, kredensial RPC, dan bot token secara ketat dikecualikan dari Git melalui `.gitignore`.
+- **Immutable Sweep Target**: The payout address is loaded strictly from the server's `.env` and held immutable in backend memory, preventing client-side tampering.
+- **Local Key Storage**: All discovered private keys are stored locally within your private PostgreSQL database and backed up to isolated local files.
+- **Zero Credential Leaks**: Sensitive files (`.env`, database credentials, and Telegram tokens) are strictly excluded from version control via `.gitignore`.
 
 ---
 
-## 📄 Lisensi
+## 📄 License
 
-Proyek ini dirilis di bawah lisensi **MIT**. Silakan lihat file [LICENSE](LICENSE) untuk informasi lebih lanjut.
+This project is licensed under the **MIT License**. See the [LICENSE](LICENSE) file for details.

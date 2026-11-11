@@ -19,6 +19,30 @@ services:
       timeout: 5s
       retries: 5
 
+  # ── GPU Hosting Mode ──────────────────────────────────────────────────────
+  # Uncomment service 'puzzle-hunt' di bawah untuk deploy full Docker
+  # (hanya jika ingin backend juga di Docker, bukan bare-metal)
+  #
+  # puzzle-hunt:
+  #   build: .
+  #   container_name: puzzle_hunt_gpu
+  #   restart: unless-stopped
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #   env_file: .env
+  #   ports:
+  #     - "3001:3001"
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: 1
+  #             capabilities: [gpu]
+  #   volumes:
+  #     - ./bin:/app/bin        # kangaroo binary
+  #     - ./target:/app/target  # rust binary
+
 volumes:
   postgres_data:
-

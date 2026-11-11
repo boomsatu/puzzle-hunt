@@ -198,7 +198,9 @@ impl HuntManager {
             .map_err(|e| format!("Database error: {e}"))?
             .ok_or(format!("Puzzle #{puzzle_num} tidak ditemukan di database"))?;
 
-        if puzzle.is_solved {
+        // Khusus puzzle testing (seperti #30 dan #31), izinkan running untuk validasi hunter pipeline
+        let is_test_puzzle = puzzle_num == 30 || puzzle_num == 31;
+        if puzzle.is_solved && !is_test_puzzle {
             return Err(format!("Puzzle #{puzzle_num} sudah tercatat SOLVED di database"));
         }
 
@@ -337,11 +339,12 @@ async fn run_hunt_loop(
     };
 
     // Mode Kangaroo menggunakan window_bits standar (default 30)
-    // Mode Address Scanner menggunakan rentang window lebih rapat (maks 18 = 262K keys) agar round responsif
+    // Untuk puzzle kecil (seperti #30 atau #31), batasi agar tidak melebihi total keyspace
+    let total_bits_cap = if puzzle.bits > 3 { (puzzle.bits as u32) - 1 } else { 2 };
     let effective_window_bits = if target_pub_bytes.is_some() {
-        window_bits
+        window_bits.min(total_bits_cap)
     } else {
-        window_bits.min(18)
+        window_bits.min(18).min(total_bits_cap)
     };
 
     // Parse rentang awal dan akhir dari database
@@ -352,13 +355,22 @@ async fn run_hunt_loop(
     let full_end = BigUint::parse_bytes(e_clean.as_bytes(), 16)
         .unwrap_or_else(|| (BigUint::one() << puzzle.bits as usize) - BigUint::one());
 
-    let window_size = BigUint::one() << effective_window_bits as usize;
-    if full_end <= full_start || (full_end.clone() - full_start.clone()) < window_size {
-        update_status(&states, puzzle_num, HunterStatus::Error("Rentang puzzle terlalu kecil".into()));
+    if full_end <= full_start {
+        update_status(&states, puzzle_num, HunterStatus::Error("Rentang puzzle tidak valid".into()));
         return;
     }
 
-    let max_window_id = (full_end.clone() - full_start.clone()) / window_size.clone();
+    let total_space = full_end.clone() - full_start.clone();
+    let mut window_size = BigUint::one() << effective_window_bits as usize;
+    if window_size > total_space {
+        window_size = total_space.clone();
+    }
+
+    let max_window_id = if total_space > window_size {
+        total_space / window_size.clone()
+    } else {
+        BigUint::one()
+    };
     let dp_bits = (effective_window_bits / 4).clamp(4, 14);
 
     // Muat riwayat window yang sudah pernah diperiksa dari PostgreSQL
@@ -370,7 +382,8 @@ async fn run_hunt_loop(
     let onchain = check_puzzle_status(&puzzle.address).await;
     update_balance(&states, puzzle_num, onchain.balance_sats);
 
-    if onchain.is_solved {
+    let is_test_puzzle = puzzle_num == 30 || puzzle_num == 31;
+    if onchain.is_solved && !is_test_puzzle {
         let _ = db::mark_puzzle_solved(&pool, puzzle_num, &onchain.message).await;
         update_status(&states, puzzle_num, HunterStatus::SolvedByOther);
         return;
@@ -681,7 +694,7 @@ async fn run_hunt_loop(
             last_check = Instant::now();
             let onchain = check_puzzle_status(&puzzle.address).await;
             update_balance(&states, puzzle_num, onchain.balance_sats);
-            if onchain.is_solved {
+            if onchain.is_solved && !is_test_puzzle {
                 let _ = db::mark_puzzle_solved(&pool, puzzle_num, &onchain.message).await;
                 update_status(&states, puzzle_num, HunterStatus::SolvedByOther);
                 tracing::warn!("🛑 Puzzle #{} telah solved oleh orang lain di on-chain!", puzzle_num);

@@ -707,7 +707,8 @@ export const App: React.FC = () => {
                       {filteredPuzzles.map((p) => {
                         const h = hunters[p.puzzle_number];
                         const isRunning = h?.status === 'Running';
-                        const isSolved = p.is_solved || h?.status === 'SolvedByUs' || h?.status === 'SolvedByOther';
+                        const isTestPuzzle = p.puzzle_number === 30 || p.puzzle_number === 31;
+                        const isSolved = (p.is_solved && !isTestPuzzle) || h?.status === 'SolvedByUs' || h?.status === 'SolvedByOther';
                         const hasPubkey = Boolean(p.pubkey_hex && p.pubkey_hex.trim().length === 66);
 
                         return (
@@ -727,6 +728,11 @@ export const App: React.FC = () => {
                                 <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-800 text-slate-300 border border-slate-700">
                                   {p.bits}-bit
                                 </span>
+                                {isTestPuzzle && (
+                                  <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
+                                    TEST
+                                  </span>
+                                )}
                               </div>
                             </td>
 

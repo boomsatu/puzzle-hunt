@@ -77,7 +77,8 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
 
   const isRunning = hunter?.status === 'Running';
   const isPausing = hunter?.status === 'Pausing';
-  const isSolved = puzzle.is_solved || hunter?.status === 'SolvedByUs' || hunter?.status === 'SolvedByOther';
+  const isTestPuzzle = puzzle.puzzle_number === 30 || puzzle.puzzle_number === 31;
+  const isSolved = (puzzle.is_solved && !isTestPuzzle) || hunter?.status === 'SolvedByUs' || hunter?.status === 'SolvedByOther';
 
   // Perhitungan total keys dari perkalian block / window
   const isPubkeyExposed = Boolean(puzzle.pubkey_hex && puzzle.pubkey_hex.trim().length === 66);

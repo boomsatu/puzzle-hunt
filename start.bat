@@ -104,56 +104,6 @@ if not exist "target\release\puzzle-hunt.exe" (
 )
 echo [BINARY] OK - target\release\puzzle-hunt.exe found
 
-:: ----------------------------------------------------------------
-:: 5. Check frontend dependencies
-:: ----------------------------------------------------------------
-if not exist "frontend\node_modules" (
-    echo [FRONTEND] Installing dependencies...
-    cd frontend
-    call npm install
-    cd ..
-)
-echo [FRONTEND] OK - Dependencies ready
-
-:: ----------------------------------------------------------------
-:: 6. Start Backend (in new window)
-:: ----------------------------------------------------------------
-echo.
-echo [BACKEND] Starting Rust backend server...
-start "Puzzle Hunt - Backend" /min cmd /c "cd /d "%~dp0" && target\release\puzzle-hunt.exe"
-timeout /t 2 /nobreak >nul
-echo [BACKEND] OK - Running on http://localhost:3001
-
-:: ----------------------------------------------------------------
-:: 7. Start Frontend (in new window)
-:: ----------------------------------------------------------------
-echo [FRONTEND] Starting Vite dev server...
-start "Puzzle Hunt - Frontend" /min cmd /c "cd /d "%~dp0frontend" && npm run dev"
-timeout /t 3 /nobreak >nul
-echo [FRONTEND] OK - Running on http://localhost:5173
-
-:: ----------------------------------------------------------------
-:: 8. Done!
-:: ----------------------------------------------------------------
-echo.
-echo  ================================================================
-echo    ALL SERVICES STARTED
-echo  ================================================================
-echo.
-echo    Dashboard : http://localhost:5173
-echo    API       : http://localhost:3001/api
-echo    WebSocket : ws://localhost:3001/api/ws
-echo    Database  : localhost:5432
-echo.
-echo    Tekan Ctrl+C atau jalankan stop.bat untuk berhenti
-echo  ================================================================
-echo.
-
-:: Open browser
-timeout /t 2 /nobreak >nul
-start "" http://localhost:5173
-
-echo [INFO] Browser opened. Launcher akan tetap berjalan.
 echo [INFO] Tutup window ini TIDAK akan menghentikan backend/frontend.
 echo [INFO] Gunakan stop.bat untuk menghentikan semua service.
 echo.

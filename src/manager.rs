@@ -324,8 +324,10 @@ fn get_optimal_workers(states: &Arc<Mutex<HashMap<i32, HunterState>>>, mode: Dev
             per_puzzle.max(1)
         }
         DeviceMode::Gpu => {
-            // Mode GPU (e.g. RTX 6000 Ada dengan 18,176 CUDA Cores):
-            // Membagi beban kerja ke 16 Concurrent CUDA Work Streams / SM Grid Blocks
+            // Mode GPU: 16 worker windows per round — maksimalkan coverage posisi random!
+            // CUDA driver men-serialize proses via time-slicing (1 aktif di GPU per waktu).
+            // 16 lokasi jump berbeda per ronde = probabilitas menemukan key lebih besar.
+            // Total: 16 × 2^30 = 17.18B keys/round (~2.3s/round @8B k/s)
             16
         }
     }
@@ -371,17 +373,32 @@ async fn run_hunt_loop(
         None
     };
 
-    // Mode Kangaroo menggunakan window_bits standar (default 30 = 1.073.741.824 keys, membagi habis 2^(N-1) dengan sisa 0)
-    // Untuk puzzle kecil, sesuaikan bit window secara dinamis agar membagi tepat ruang kunci tanpa sisa
+    // Deteksi device mode seawal mungkin untuk menentukan parameter window optimal
+    let device_mode = DeviceMode::from_env();
+
+    // Hitung window bits optimal berdasarkan device mode dan tipe puzzle
     let total_range_bits = if puzzle.bits > 2 { (puzzle.bits - 1) as u32 } else { 1 };
-    let effective_window_bits = if target_pub_bytes.is_some() {
-        if total_range_bits > 30 {
-            window_bits.min(total_range_bits - 1)
-        } else {
-            total_range_bits.saturating_sub(1).max(8)
+    let effective_window_bits = match device_mode {
+        DeviceMode::Gpu => {
+            // GPU: 8 worker × 2^30 = 8.59B keys/round — CUDA driver serialize via time-slicing
+            // Window 2^30 = 1.073.741.824 keys per worker — sweet spot: ~134ms per window @8B k/s
+            // Total round: 8 × ~140ms = ~1,120ms (GPU utilization ~95%)
+            // Ini memberikan 8 posisi jump berbeda per ronde = coverage menyebar!
+            30u32.min(total_range_bits.saturating_sub(1).max(8))
         }
-    } else {
-        window_bits.min(18).min(total_range_bits.saturating_sub(1).max(8))
+        _ => {
+            if target_pub_bytes.is_some() {
+                // Kangaroo mode (CPU): window_bits default 30 (1.073.741.824 keys)
+                if total_range_bits > 30 {
+                    window_bits.min(total_range_bits - 1)
+                } else {
+                    total_range_bits.saturating_sub(1).max(8)
+                }
+            } else {
+                // Address scanner (CPU): cap at 18 bits (~262K keys/worker)
+                window_bits.min(18).min(total_range_bits.saturating_sub(1).max(8))
+            }
+        }
     };
 
     // Parse rentang awal dan akhir dari database
@@ -441,7 +458,6 @@ async fn run_hunt_loop(
     let mut last_check = Instant::now();
     let session_start = Instant::now();
 
-    let device_mode = DeviceMode::from_env();
     match device_mode {
         DeviceMode::Local => {
             tracing::info!("🖥️ [SETUP LOCAL] Mode Local aktif: Sisakan 2 core untuk OS, Postgres & desktop.");
@@ -454,8 +470,14 @@ async fn run_hunt_loop(
             if cuda_ok {
                 tracing::info!("🚀 [SETUP GPU] Mode GPU CUDA aktif: {cuda_info}");
             } else {
-                tracing::warn!("⚠️ [SETUP GPU] CUDA tidak terdeteksi pada host ini, fallback otomatis ke mode VPS (Max Core - 1).");
+                tracing::warn!("⚠️ [SETUP GPU] CUDA solver binary tidak ditemukan — fallback ke Rust CPU engine (sangat lambat dengan window 2^{}).", effective_window_bits);
             }
+            let gpu_window_keys: u64 = 1u64 << effective_window_bits;
+            let gpu_total_round = gpu_window_keys * 16; // 16 workers
+            tracing::info!(
+                "🎯 [GPU CONFIG] 16 workers × 2^{} = {} keys/worker, total {}/round (~{:.1}s/round est. @8B k/s)",
+                effective_window_bits, gpu_window_keys, gpu_total_round, gpu_total_round as f64 / 8_000_000_000.0
+            );
         }
     }
 
@@ -510,7 +532,7 @@ async fn run_hunt_loop(
             let mut s = states.lock().unwrap();
             if let Some(st) = s.get_mut(&puzzle_num) {
                 st.last_window_hex = if device_mode == DeviceMode::Gpu {
-                    format!("{first_start_hex}..{first_end_hex} (⚡ {num_workers} CUDA Streams)")
+                    format!("{first_start_hex}..{first_end_hex} (⚡ {num_workers} GPU Workers 2^{})", effective_window_bits)
                 } else if num_workers > 1 {
                     format!("{first_start_hex}..{first_end_hex} (⚡ {num_workers} threads)")
                 } else {
@@ -559,6 +581,8 @@ async fn run_hunt_loop(
                         ) {
                             return (win_id, ws_clone, we_clone, res);
                         }
+                    } else {
+                        tracing::warn!("⚠️ [GPU FALLBACK] CUDA solver binary tidak ditemukan! Fallback ke Rust CPU engine — window besar akan sangat lambat.");
                     }
                 }
 

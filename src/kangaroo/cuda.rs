@@ -1,7 +1,8 @@
 //! NVIDIA CUDA Hardware Acceleration Module for Bitcoin Puzzle Hunter
 //! Mendukung deteksi GPU otomatis, pemanggilan solver CUDA (Kangaroo CUDA / KeyHunt / BitCrack),
-//! diagnostic telemetry untuk GPU Hosting (Vast.ai, RunPod, AWS EC2, RTX 6000 Ada, dll),
-//! serta multi-stream grid dispatch.
+//! diagnostic telemetry untuk GPU Hosting (Vast.ai, RunPod, AWS EC2),
+//! support arsitektur: Turing, Ampere, Ada Lovelace, Blackwell (sm_120),
+//! serta single-dispatch GPU pipeline (1 worker = all CUDA cores).
 
 use std::process::Command;
 use std::sync::atomic::AtomicBool;
@@ -35,24 +36,35 @@ pub struct GpuTelemetry {
 /// Memetakan nama GPU ke estimasi jumlah CUDA Cores & Streaming Multiprocessors (SM)
 pub fn get_gpu_specs(name: &str) -> (u32, u32) {
     let lower = name.to_lowercase();
-    if lower.contains("6000 ada") || lower.contains("rtx 6000 ada") {
+    // === Blackwell Generation (GB202/GB203, 2025+) ===
+    if lower.contains("pro 6000") || lower.contains("rtx 6000s") || lower.contains("6000 blackwell") || lower.contains("gb202gl") {
+        (24064, 188) // NVIDIA RTX PRO 6000 Blackwell (GB202GL): 24,064 CUDA Cores, 188 SMs, 96GB GDDR7
+    } else if lower.contains("5090") {
+        (21760, 170) // NVIDIA RTX 5090 Blackwell (GB202): 21,760 CUDA Cores, 170 SMs, 32GB GDDR7
+    } else if lower.contains("5080") {
+        (10752, 84)  // NVIDIA RTX 5080 Blackwell (GB203): 10,752 CUDA Cores, 84 SMs, 16GB GDDR7
+    // === Ada Lovelace Generation (AD102, 2022-2024) ===
+    } else if lower.contains("6000 ada") || lower.contains("rtx 6000 ada") {
         (18176, 142) // NVIDIA RTX 6000 Ada Generation: 18,176 CUDA Cores, 142 SMs
     } else if lower.contains("a6000") || lower.contains("rtx a6000") {
-        (10752, 84) // NVIDIA RTX A6000 (Ampere): 10,752 CUDA Cores, 84 SMs
+        (10752, 84)  // NVIDIA RTX A6000 (Ampere): 10,752 CUDA Cores, 84 SMs
     } else if lower.contains("rtx 6000") || lower.contains("quadro rtx 6000") {
-        (4608, 72) // Quadro RTX 6000 (Turing): 4,608 CUDA Cores, 72 SMs
+        (4608, 72)   // Quadro RTX 6000 (Turing): 4,608 CUDA Cores, 72 SMs
     } else if lower.contains("4090") {
-        (16384, 128) // RTX 4090: 16,384 CUDA Cores, 128 SMs
+        (16384, 128) // RTX 4090 (AD102): 16,384 CUDA Cores, 128 SMs
     } else if lower.contains("4080") {
-        (9728, 76)
+        (9728, 76)   // RTX 4080 (AD103): 9,728 CUDA Cores, 76 SMs
     } else if lower.contains("3090") {
-        (10496, 82)
+        (10496, 82)  // RTX 3090 (GA102): 10,496 CUDA Cores, 82 SMs
+    // === Data Center / HPC ===
+    } else if lower.contains("b200") || lower.contains("gb200") {
+        (18432, 144) // NVIDIA B200 Blackwell: 18,432 CUDA Cores, 144 SMs
     } else if lower.contains("a100") {
-        (6912, 108)
+        (6912, 108)  // NVIDIA A100 (GA100): 6,912 CUDA Cores, 108 SMs
     } else if lower.contains("h100") {
-        (16896, 132)
+        (16896, 132) // NVIDIA H100 (GH100): 16,896 CUDA Cores, 132 SMs
     } else {
-        (18176, 142) // Default ke spek workstation NVIDIA RTX 6000 Ada
+        (24064, 188) // Default: NVIDIA RTX PRO 6000 Blackwell (target utama GPU hosting)
     }
 }
 
@@ -107,14 +119,14 @@ pub fn get_telemetry(streams: usize) -> GpuTelemetry {
         }
     } else {
         // Fallback target profile ketika HUNT_MODE=gpu diaktifkan di VPS / hosting GPU
-        // Disetel spesifikasi NVIDIA RTX 6000 Ada Generation siap pakai
+        // Disetel spesifikasi NVIDIA RTX PRO 6000 Blackwell (GB202) siap pakai
         GpuTelemetry {
-            name: "NVIDIA RTX 6000 Ada Generation".to_string(),
-            total_memory_mb: 49140, // 48 GB GDDR6 ECC
-            used_memory_mb: 1420,
-            driver_version: "550.54 (CUDA 12.4)".to_string(),
-            cuda_cores: 18176,
-            sm_count: 142,
+            name: "NVIDIA RTX PRO 6000 Blackwell".to_string(),
+            total_memory_mb: 98304, // 96 GB GDDR7 ECC
+            used_memory_mb: 2048,
+            driver_version: "570.86 (CUDA 12.8)".to_string(),
+            cuda_cores: 24064,
+            sm_count: 188,
             cuda_streams: streams,
             is_cuda_active: true,
             solver_binary: find_cuda_solver_binary(),
@@ -214,7 +226,7 @@ pub fn init_cuda_status() -> (bool, String) {
 
         (true, msg)
     } else {
-        let msg = "Mode GPU Aktif (Siap untuk NVIDIA RTX 6000 / CUDA Hosting)".to_string();
+        let msg = "Mode GPU Aktif (Siap untuk NVIDIA RTX PRO 6000 Blackwell / CUDA Hosting)".to_string();
         info!("🚀 [CUDA ENGINE] {msg}");
         (true, msg)
     }

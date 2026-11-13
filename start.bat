@@ -104,6 +104,16 @@ if not exist "target\release\puzzle-hunt.exe" (
 )
 echo [BINARY] OK - target\release\puzzle-hunt.exe found
 
+:: ----------------------------------------------------------------
+:: 6. Start Backend (in new window)
+:: ----------------------------------------------------------------
+echo.
+echo [BACKEND] Starting Rust backend server...
+start "Puzzle Hunt - Backend" /min cmd /c "cd /d "%~dp0" && target\release\puzzle-hunt.exe"
+timeout /t 2 /nobreak >nul
+echo [BACKEND] OK - Running on http://localhost:3001
+
+
 echo [INFO] Tutup window ini TIDAK akan menghentikan backend/frontend.
 echo [INFO] Gunakan stop.bat untuk menghentikan semua service.
 echo.

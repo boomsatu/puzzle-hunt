@@ -82,6 +82,14 @@ pub struct HunterState {
     pub device_mode: String,
     #[serde(default)]
     pub gpu_info: Option<crate::kangaroo::cuda::GpuTelemetry>,
+    #[serde(default)]
+    pub window_bits: u32,
+    #[serde(default)]
+    pub window_keys: u64,
+    #[serde(default)]
+    pub keys_per_round: u64,
+    #[serde(default)]
+    pub is_kangaroo_mode: bool,
 }
 
 impl HunterState {
@@ -110,6 +118,10 @@ impl HunterState {
             active_windows: Vec::new(),
             device_mode: dev_mode.as_str().to_string(),
             gpu_info,
+            window_bits: 0,
+            window_keys: 0,
+            keys_per_round: 0,
+            is_kangaroo_mode: false,
         }
     }
 }
@@ -120,17 +132,40 @@ pub struct HuntManager {
     pub stop_flags: Arc<Mutex<HashMap<i32, Arc<AtomicBool>>>>,
     pub pause_flags: Arc<Mutex<HashMap<i32, Arc<AtomicBool>>>>,
     pub ws_tx: tokio::sync::broadcast::Sender<String>,
+    pub monitor: Arc<crate::monitor::SystemMonitor>,
 }
 
 impl HuntManager {
     pub fn new(pool: PgPool) -> Self {
         let (ws_tx, _) = tokio::sync::broadcast::channel(200);
+        let monitor = Arc::new(crate::monitor::SystemMonitor::new());
+
+        // Background task non-blocking untuk memantau & broadcast live CPU load & RAM
+        // Dijalankan dengan interval 1500ms agar beban CPU sampling mendekati 0 (< 0.01% CPU)
+        let monitor_clone = monitor.clone();
+        let ws_tx_clone = ws_tx.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_millis(1500));
+            interval.tick().await; // Tick awal langsung selesai
+            loop {
+                interval.tick().await;
+                let metrics = monitor_clone.sample();
+                // Broadcast ke semua client WebSocket yang aktif
+                if ws_tx_clone.receiver_count() > 0 {
+                    if let Ok(msg) = serde_json::to_string(&metrics) {
+                        let _ = ws_tx_clone.send(msg);
+                    }
+                }
+            }
+        });
+
         Self {
             pool,
             states: Arc::new(Mutex::new(HashMap::new())),
             stop_flags: Arc::new(Mutex::new(HashMap::new())),
             pause_flags: Arc::new(Mutex::new(HashMap::new())),
             ws_tx,
+            monitor,
         }
     }
 
@@ -198,9 +233,7 @@ impl HuntManager {
             .map_err(|e| format!("Database error: {e}"))?
             .ok_or(format!("Puzzle #{puzzle_num} tidak ditemukan di database"))?;
 
-        // Khusus puzzle testing (seperti #30 dan #31), izinkan running untuk validasi hunter pipeline
-        let is_test_puzzle = puzzle_num == 30 || puzzle_num == 31;
-        if puzzle.is_solved && !is_test_puzzle {
+        if puzzle.is_solved {
             return Err(format!("Puzzle #{puzzle_num} sudah tercatat SOLVED di database"));
         }
 
@@ -338,13 +371,17 @@ async fn run_hunt_loop(
         None
     };
 
-    // Mode Kangaroo menggunakan window_bits standar (default 30)
-    // Untuk puzzle kecil (seperti #30 atau #31), batasi agar tidak melebihi total keyspace
-    let total_bits_cap = if puzzle.bits > 3 { (puzzle.bits as u32) - 1 } else { 2 };
+    // Mode Kangaroo menggunakan window_bits standar (default 30 = 1.073.741.824 keys, membagi habis 2^(N-1) dengan sisa 0)
+    // Untuk puzzle kecil, sesuaikan bit window secara dinamis agar membagi tepat ruang kunci tanpa sisa
+    let total_range_bits = if puzzle.bits > 2 { (puzzle.bits - 1) as u32 } else { 1 };
     let effective_window_bits = if target_pub_bytes.is_some() {
-        window_bits.min(total_bits_cap)
+        if total_range_bits > 30 {
+            window_bits.min(total_range_bits - 1)
+        } else {
+            total_range_bits.saturating_sub(1).max(8)
+        }
     } else {
-        window_bits.min(18).min(total_bits_cap)
+        window_bits.min(18).min(total_range_bits.saturating_sub(1).max(8))
     };
 
     // Parse rentang awal dan akhir dari database
@@ -355,22 +392,33 @@ async fn run_hunt_loop(
     let full_end = BigUint::parse_bytes(e_clean.as_bytes(), 16)
         .unwrap_or_else(|| (BigUint::one() << puzzle.bits as usize) - BigUint::one());
 
+    let window_size = BigUint::one() << effective_window_bits as usize;
     if full_end <= full_start {
-        update_status(&states, puzzle_num, HunterStatus::Error("Rentang puzzle tidak valid".into()));
+        update_status(&states, puzzle_num, HunterStatus::Error("Rentang puzzle tidak valid (end <= start)".into()));
         return;
     }
 
-    let total_space = full_end.clone() - full_start.clone();
-    let mut window_size = BigUint::one() << effective_window_bits as usize;
-    if window_size > total_space {
-        window_size = total_space.clone();
-    }
-
-    let max_window_id = if total_space > window_size {
-        total_space / window_size.clone()
+    // Auto-Padding: Jika total keyspace tidak habis dibagi window_size (sisa > 0),
+    // genapkan secara otomatis dengan menambahkan padding pada batas akhir (effective_end)
+    // sehingga sisa pembagian SELALU 0 dan seluruh worker memproses window dengan ukuran simetris.
+    let raw_total_keys = (&full_end - &full_start) + BigUint::one();
+    let remainder = &raw_total_keys % &window_size;
+    let effective_end = if remainder.is_zero() {
+        full_end.clone()
     } else {
-        BigUint::one()
+        let padding = &window_size - &remainder;
+        let padded_end = &full_end + &padding;
+        tracing::info!(
+            "📐 [AUTO-PADDING] Puzzle #{}: Rentang digenapkan (+{} keys) agar membagi tepat window 2^{} dengan sisa 0.",
+            puzzle_num,
+            padding,
+            effective_window_bits
+        );
+        padded_end
     };
+
+    let total_windows = (&effective_end - &full_start + BigUint::one()) / window_size.clone();
+    let max_window_id = total_windows - BigUint::one();
     let dp_bits = (effective_window_bits / 4).clamp(4, 14);
 
     // Muat riwayat window yang sudah pernah diperiksa dari PostgreSQL
@@ -382,8 +430,7 @@ async fn run_hunt_loop(
     let onchain = check_puzzle_status(&puzzle.address).await;
     update_balance(&states, puzzle_num, onchain.balance_sats);
 
-    let is_test_puzzle = puzzle_num == 30 || puzzle_num == 31;
-    if onchain.is_solved && !is_test_puzzle {
+    if onchain.is_solved {
         let _ = db::mark_puzzle_solved(&pool, puzzle_num, &onchain.message).await;
         update_status(&states, puzzle_num, HunterStatus::SolvedByOther);
         return;
@@ -428,15 +475,16 @@ async fn run_hunt_loop(
         // Tentukan jumlah worker thread dinamis sesuai device mode (local, vps, gpu)
         let num_workers = get_optimal_workers(&states, device_mode);
 
-        // Ambil batch window acak sebanyak num_workers tanpa duplikasi
+        // Ambil batch window dengan prioritas: WAJIB scan range awal terlebih dahulu, baru random jump!
         let mut batch_windows = Vec::with_capacity(num_workers);
         for _ in 0..num_workers {
-            let (window_id, w_start, w_end) = pick_random_window(
+            let (window_id, w_start, w_end) = pick_window_smart(
                 &full_start,
-                &full_end,
+                &effective_end,
                 &window_size,
                 &max_window_id,
                 &scanned,
+                num_workers as u64,
             );
             insert_sorted(&mut scanned, (w_start.clone(), w_end.clone()));
             batch_windows.push((window_id, w_start, w_end));
@@ -472,6 +520,11 @@ async fn run_hunt_loop(
                 st.active_workers = num_workers;
                 st.active_windows = active_win_list.clone();
                 st.device_mode = device_mode.as_str().to_string();
+                let win_keys = 1u64 << effective_window_bits;
+                st.window_bits = effective_window_bits;
+                st.window_keys = win_keys;
+                st.keys_per_round = (num_workers as u64) * win_keys;
+                st.is_kangaroo_mode = target_pub_bytes.is_some();
                 if device_mode == DeviceMode::Gpu {
                     st.gpu_info = Some(crate::kangaroo::cuda::get_telemetry(num_workers));
                 }
@@ -582,6 +635,11 @@ async fn run_hunt_loop(
                 st.active_workers = num_workers;
                 st.active_windows = active_win_list;
                 st.device_mode = device_mode.as_str().to_string();
+                let win_keys = 1u64 << effective_window_bits;
+                st.window_bits = effective_window_bits;
+                st.window_keys = win_keys;
+                st.keys_per_round = (num_workers as u64) * win_keys;
+                st.is_kangaroo_mode = target_pub_bytes.is_some();
 
                 // Broadcast live progress ke WebSocket client
                 if let Ok(msg) = serde_json::to_string(&*st) {
@@ -694,7 +752,7 @@ async fn run_hunt_loop(
             last_check = Instant::now();
             let onchain = check_puzzle_status(&puzzle.address).await;
             update_balance(&states, puzzle_num, onchain.balance_sats);
-            if onchain.is_solved && !is_test_puzzle {
+            if onchain.is_solved {
                 let _ = db::mark_puzzle_solved(&pool, puzzle_num, &onchain.message).await;
                 update_status(&states, puzzle_num, HunterStatus::SolvedByOther);
                 tracing::warn!("🛑 Puzzle #{} telah solved oleh orang lain di on-chain!", puzzle_num);
@@ -717,6 +775,36 @@ async fn run_hunt_loop(
 }
 
 // ===== Utility Helpers =====
+
+/// Memilih window berikutnya dengan strategi "Range Awal Terlebih Dahulu, Lalu Random Jump":
+/// 1. Jika range awal (Window #0, #1, s/d `num_initial_priority - 1`) belum tercatat di riwayat PostgreSQL,
+///    sistem WAJIB memproses window awal ini secara terurut tanpa ada sisa ruang key yang tertinggal.
+/// 2. Setelah range awal selesai discan, sistem secara otomatis beralih ke mode Random Jump untuk eksplorasi luas di seluruh keyspace.
+fn pick_window_smart(
+    full_start: &BigUint,
+    full_end: &BigUint,
+    window_size: &BigUint,
+    max_window_id: &BigUint,
+    scanned: &[(BigUint, BigUint)],
+    num_initial_priority: u64,
+) -> (i64, BigUint, BigUint) {
+    // 1. Cek apakah ada window awal di rentang prioritas (0..num_initial_priority) yang belum di-scan
+    for i in 0..num_initial_priority {
+        let cand = BigUint::from(i);
+        if &cand > max_window_id {
+            break;
+        }
+        let ws = full_start + (&cand * window_size);
+        let we = (&ws + window_size - BigUint::one()).min(full_end.clone());
+        if !is_range_scanned(&ws, &we, scanned) {
+            let wid = i as i64;
+            return (wid, ws, we);
+        }
+    }
+
+    // 2. Jika seluruh range awal prioritas sudah tercatat di PostgreSQL, lanjutkan dengan Random Jump
+    pick_random_window(full_start, full_end, window_size, max_window_id, scanned)
+}
 
 fn pick_random_window(
     full_start: &BigUint,

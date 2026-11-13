@@ -3,6 +3,7 @@ mod chain;
 mod db;
 mod kangaroo;
 mod manager;
+mod monitor;
 mod notify;
 mod transfer;
 

@@ -40,6 +40,18 @@ export interface GpuTelemetry {
   solver_binary?: string | null;
 }
 
+export interface SystemMetrics {
+  event_type: 'system_metrics';
+  cpu_usage_pct: number;
+  per_core_usage: number[];
+  cpu_cores: number;
+  cpu_brand: string;
+  cpu_freq_mhz: number;
+  memory_used_mb: number;
+  memory_total_mb: number;
+  memory_usage_pct: number;
+}
+
 export interface HunterState {
   puzzle_num: number;
   status: HunterStatus;
@@ -57,6 +69,10 @@ export interface HunterState {
   active_windows?: WorkerWindow[];
   device_mode?: string;
   gpu_info?: GpuTelemetry | null;
+  window_bits?: number;
+  window_keys?: number;
+  keys_per_round?: number;
+  is_kangaroo_mode?: boolean;
 }
 
 export interface FoundKey {
@@ -133,30 +149,51 @@ export interface ScannedWindow {
   created_at: string;
 }
 
+const LARGE_NUMBER_UNITS: [number, string][] = [
+  [1e78, 'Kuinvigintiliun'],
+  [1e75, 'Kuatuorvigintiliun'],
+  [1e72, 'Trevigintiliun'],
+  [1e69, 'Duovigintiliun'],
+  [1e66, 'Unvigintiliun'],
+  [1e63, 'Vigintiliun'],
+  [1e60, 'Novemdesiliun'],
+  [1e57, 'Oktodesiliun'],
+  [1e54, 'Septendesiliun'],
+  [1e51, 'Sekdesiliun'],
+  [1e48, 'Kuindesiliun'],
+  [1e45, 'Kuatuordesiliun'],
+  [1e42, 'Tredesiliun'],
+  [1e39, 'Duodesiliun'],
+  [1e36, 'Undesiliun'],
+  [1e33, 'Desiliun'],
+  [1e30, 'Noniliun'],
+  [1e27, 'Oktiliun'],
+  [1e24, 'Septiliun'],
+  [1e21, 'Sekstiliun'],
+  [1e18, 'Kuintiliun'],
+  [1e15, 'Kuadriliun'],
+  [1e12, 'Triliun'],
+  [1e9, 'Miliar'],
+  [1e6, 'Juta'],
+];
+
 export function formatLargeNumber(n: number): string {
   if (!n || n <= 0) return '0';
-  if (n >= 1_000_000_000_000) {
-    return `${(n / 1_000_000_000_000).toFixed(2)} Triliun`;
-  }
-  if (n >= 1_000_000_000) {
-    return `${(n / 1_000_000_000).toFixed(2)} Miliar`;
-  }
-  if (n >= 1_000_000) {
-    return `${(n / 1_000_000).toFixed(1)} Juta`;
+  for (const [value, name] of LARGE_NUMBER_UNITS) {
+    if (n >= value) {
+      const decimals = value === 1e6 ? 1 : 2;
+      return `${(n / value).toFixed(decimals)} ${name}`;
+    }
   }
   return Math.round(n).toLocaleString();
 }
-
 export function formatCompactKeys(n: number): string {
   if (!n || n <= 0) return '0';
-  if (n >= 1_000_000_000_000) {
-    return `${(n / 1_000_000_000_000).toFixed(2)} Triliun`;
-  }
-  if (n >= 1_000_000_000) {
-    return `${(n / 1_000_000_000).toFixed(2)} Miliar`;
-  }
-  if (n >= 1_000_000) {
-    return `${(n / 1_000_000).toFixed(1)} Juta`;
+  for (const [value, name] of LARGE_NUMBER_UNITS) {
+    if (n >= value) {
+      const decimals = value === 1e6 ? 1 : 2;
+      return `${(n / value).toFixed(decimals)} ${name}`;
+    }
   }
   return Math.round(n).toLocaleString();
 }
@@ -166,8 +203,22 @@ export function formatCompactKeys(n: number): string {
  */
 export function formatBigIntCompact(big: bigint): string {
   if (big <= 0n) return '0';
-
   const units: [bigint, string][] = [
+    [10n ** 78n, 'Kuinvigintiliun'],
+    [10n ** 75n, 'Kuatuorvigintiliun'],
+    [10n ** 72n, 'Trevigintiliun'],
+    [10n ** 69n, 'Duovigintiliun'],
+    [10n ** 66n, 'Unvigintiliun'],
+    [10n ** 63n, 'Vigintiliun'],
+    [10n ** 60n, 'Novemdesiliun'],
+    [10n ** 57n, 'Oktodesiliun'],
+    [10n ** 54n, 'Septendesiliun'],
+    [10n ** 51n, 'Sekdesiliun'],
+    [10n ** 48n, 'Kuindesiliun'],
+    [10n ** 45n, 'Kuatuordesiliun'],
+    [10n ** 42n, 'Tredesiliun'],
+    [10n ** 39n, 'Duodesiliun'],
+    [10n ** 36n, 'Undesiliun'],
     [10n ** 33n, 'Desiliun'],
     [10n ** 30n, 'Noniliun'],
     [10n ** 27n, 'Oktiliun'],
@@ -176,9 +227,9 @@ export function formatBigIntCompact(big: bigint): string {
     [10n ** 18n, 'Kuintiliun'],
     [10n ** 15n, 'Kuadriliun'],
     [10n ** 12n, 'Triliun'],
-    [10n ** 9n,  'Miliar'],
-    [10n ** 6n,  'Juta'],
-    [10n ** 3n,  'Ribu'],
+    [10n ** 9n, 'Miliar'],
+    [10n ** 6n, 'Juta'],
+    [10n ** 3n, 'Ribu'],
   ];
 
   for (const [divisor, label] of units) {
@@ -191,16 +242,41 @@ export function formatBigIntCompact(big: bigint): string {
   return big.toString();
 }
 
+const SPEED_UNITS: [number, string, number][] = [
+  [1e78, 'QiVg', 2],
+  [1e75, 'QaVg', 2],
+  [1e72, 'TVg', 2],
+  [1e69, 'DVg', 2],
+  [1e66, 'UVg', 2],
+  [1e63, 'Vg', 2],
+  [1e60, 'NoDc', 2],
+  [1e57, 'OcDc', 2],
+  [1e54, 'SpDc', 2],
+  [1e51, 'SxDc', 2],
+  [1e48, 'QiDc', 2],
+  [1e45, 'QaDc', 2],
+  [1e42, 'TDc', 2],
+  [1e39, 'DDc', 2],
+  [1e36, 'UDc', 2],
+  [1e33, 'Dc', 2],
+  [1e30, 'No', 2],
+  [1e27, 'Oc', 2],
+  [1e24, 'Sp', 2],
+  [1e21, 'Sx', 2],
+  [1e18, 'Qi', 2],
+  [1e15, 'Qa', 2],
+  [1e12, 'T', 2],
+  [1e9, 'B', 2],
+  [1e6, 'M', 1],
+  [1e3, 'K', 0],
+];
+
 export function formatKeysSpeed(kps: number): string {
   if (!kps || kps <= 0) return '0 k/s';
-  if (kps >= 1_000_000_000) {
-    return `${(kps / 1_000_000_000).toFixed(2)} B k/s`;
-  }
-  if (kps >= 1_000_000) {
-    return `${(kps / 1_000_000).toFixed(1)} M k/s`;
-  }
-  if (kps >= 1_000) {
-    return `${(kps / 1_000).toFixed(0)} K k/s`;
+  for (const [value, suffix, decimals] of SPEED_UNITS) {
+    if (kps >= value) {
+      return `${(kps / value).toFixed(decimals)} ${suffix} k/s`;
+    }
   }
   return `${Math.round(kps)} k/s`;
 }

@@ -25,8 +25,18 @@ import {
   Sparkles,
   LogOut,
   Loader2,
+  Cpu,
+  Activity,
 } from 'lucide-react';
-import { Puzzle, HunterState, FoundKey, SweepTimelineEvent, formatKeysSpeed, formatCompactKeys } from './types';
+import {
+  Puzzle,
+  HunterState,
+  FoundKey,
+  SweepTimelineEvent,
+  SystemMetrics,
+  formatKeysSpeed,
+  formatCompactKeys,
+} from './types';
 import { PuzzleCard } from './components/PuzzleCard';
 import { AddPuzzleModal } from './components/AddPuzzleModal';
 import { FoundKeysModal } from './components/FoundKeysModal';
@@ -53,6 +63,7 @@ export const App: React.FC = () => {
   const [wsConnected, setWsConnected] = useState(false);
   const [lastRefreshed, setLastRefreshed] = useState<Date>(new Date());
   const [copiedAddressId, setCopiedAddressId] = useState<number | null>(null);
+  const [systemMetrics, setSystemMetrics] = useState<SystemMetrics | null>(null);
 
   // State Autentikasi Cloud
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
@@ -153,11 +164,25 @@ export const App: React.FC = () => {
     }
   };
 
+  // Ambil metrik hardware CPU load & RAM
+  const fetchSystemMetrics = async () => {
+    try {
+      const res = await fetch('/api/system/metrics');
+      if (res.ok) {
+        const data = await res.json();
+        setSystemMetrics(data);
+      }
+    } catch {
+      // Abaikan jika server sibuk
+    }
+  };
+
   const refreshAll = () => {
     fetchConfig();
     fetchPuzzles();
     fetchHuntersStatus();
     fetchFoundKeys();
+    fetchSystemMetrics();
     setLastRefreshed(new Date());
   };
 
@@ -213,6 +238,12 @@ export const App: React.FC = () => {
       ws.onmessage = (event) => {
         try {
           const raw = JSON.parse(event.data);
+
+          // 0. Tangkap event broadcast telemetry CPU & RAM live
+          if (raw && raw.event_type === 'system_metrics') {
+            setSystemMetrics(raw as SystemMetrics);
+            return;
+          }
 
           // 1. Tangkap event broadcast timeline auto-transfer
           if (raw && raw.event_type === 'sweep_timeline') {
@@ -275,6 +306,7 @@ export const App: React.FC = () => {
     const timer = setInterval(() => {
       if (!wsConnected) {
         fetchHuntersStatus();
+        fetchSystemMetrics();
       }
     }, 5000);
     return () => clearInterval(timer);
@@ -384,6 +416,24 @@ export const App: React.FC = () => {
                   ></span>
                   <span>{wsConnected ? 'WSS Live' : 'WSS Reconnecting'}</span>
                 </span>
+
+                {/* Real-time CPU Load Badge di Navbar */}
+                {systemMetrics && (
+                  <span
+                    className={`hidden sm:flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full font-medium border transition ${
+                      systemMetrics.cpu_usage_pct >= 85
+                        ? 'bg-rose-500/10 text-rose-400 border-rose-500/20'
+                        : systemMetrics.cpu_usage_pct >= 50
+                        ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                        : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                    }`}
+                    title={`Host CPU: ${systemMetrics.cpu_brand} (${systemMetrics.cpu_cores} Cores @ ${systemMetrics.cpu_freq_mhz} MHz)\nRAM: ${(systemMetrics.memory_used_mb / 1024).toFixed(1)} GB / ${(systemMetrics.memory_total_mb / 1024).toFixed(1)} GB (${systemMetrics.memory_usage_pct.toFixed(0)}%)`}
+                  >
+                    <Activity className="w-3 h-3 animate-pulse" />
+                    <span className="font-mono font-bold">{systemMetrics.cpu_usage_pct.toFixed(1)}%</span>
+                    <span className="text-[10px] text-slate-400 font-normal">CPU</span>
+                  </span>
+                )}
               </div>
               <p className="text-xs text-slate-400">
                 Pollard's Kangaroo O(√N) Controller & PostgreSQL Database
@@ -476,7 +526,7 @@ export const App: React.FC = () => {
             </div>
 
             {/* Metric Bar */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
               <div className="p-4 bg-slate-900/50 border border-slate-800/80 rounded-2xl">
                 <div className="flex items-center gap-2 text-slate-400 text-xs mb-1">
                   <Server className="w-4 h-4 text-amber-400" />
@@ -485,6 +535,65 @@ export const App: React.FC = () => {
                 <div className="text-lg font-bold text-white flex items-center gap-2">
                   <span className={`w-2.5 h-2.5 rounded-full ${dbConnected ? 'bg-emerald-400' : 'bg-rose-500'}`}></span>
                   <span>{dbConnected ? 'Connected' : 'Disconnected'}</span>
+                </div>
+              </div>
+
+              {/* Realtime CPU Load Card */}
+              <div className="p-4 bg-slate-900/50 border border-slate-800/80 rounded-2xl relative overflow-hidden">
+                <div className="flex items-center justify-between text-slate-400 text-xs mb-1">
+                  <div className="flex items-center gap-2">
+                    <Cpu
+                      className={`w-4 h-4 ${
+                        (systemMetrics?.cpu_usage_pct || 0) >= 85
+                          ? 'text-rose-400'
+                          : (systemMetrics?.cpu_usage_pct || 0) >= 50
+                          ? 'text-amber-400'
+                          : 'text-emerald-400'
+                      }`}
+                    />
+                    <span>Realtime CPU Load</span>
+                  </div>
+                  <span className="flex items-center gap-1 text-[10px] text-emerald-400 font-medium">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                    Live
+                  </span>
+                </div>
+                <div className="text-lg font-bold font-mono flex items-baseline gap-2">
+                  <span
+                    className={
+                      (systemMetrics?.cpu_usage_pct || 0) >= 85
+                        ? 'text-rose-400'
+                        : (systemMetrics?.cpu_usage_pct || 0) >= 50
+                        ? 'text-amber-400'
+                        : 'text-emerald-400'
+                    }
+                  >
+                    {systemMetrics ? `${systemMetrics.cpu_usage_pct.toFixed(1)}%` : '0.0%'}
+                  </span>
+                  <span className="text-xs text-slate-500 font-normal">
+                    {systemMetrics?.cpu_cores ? `${systemMetrics.cpu_cores} Cores` : ''}
+                  </span>
+                </div>
+                {/* Mini Live Load Meter */}
+                <div className="w-full bg-slate-800/80 rounded-full h-1.5 mt-2 overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all duration-700 ease-out ${
+                      (systemMetrics?.cpu_usage_pct || 0) >= 85
+                        ? 'bg-rose-500'
+                        : (systemMetrics?.cpu_usage_pct || 0) >= 50
+                        ? 'bg-amber-500'
+                        : 'bg-emerald-400'
+                    }`}
+                    style={{ width: `${Math.min(100, Math.max(0, systemMetrics?.cpu_usage_pct || 0))}%` }}
+                  />
+                </div>
+                <div className="text-[10px] text-slate-400 mt-1 flex justify-between truncate" title={systemMetrics?.cpu_brand}>
+                  <span className="truncate">{systemMetrics?.cpu_brand || 'Host CPU'}</span>
+                  {systemMetrics && (
+                    <span className="text-slate-500 font-mono shrink-0 ml-1">
+                      RAM {(systemMetrics.memory_used_mb / 1024).toFixed(1)}/{(systemMetrics.memory_total_mb / 1024).toFixed(0)}GB
+                    </span>
+                  )}
                 </div>
               </div>
 
@@ -526,6 +635,7 @@ export const App: React.FC = () => {
           <PuzzleDetailPage
             puzzle={puzzles.find((p) => p.puzzle_number === selectedPuzzleNumber)!}
             hunter={hunters[selectedPuzzleNumber]}
+            systemMetrics={systemMetrics}
             destinationAddress={destinationAddress}
             onBack={() => setSelectedPuzzleNumber(null)}
             onRefresh={refreshAll}
@@ -707,8 +817,7 @@ export const App: React.FC = () => {
                       {filteredPuzzles.map((p) => {
                         const h = hunters[p.puzzle_number];
                         const isRunning = h?.status === 'Running';
-                        const isTestPuzzle = p.puzzle_number === 30 || p.puzzle_number === 31;
-                        const isSolved = (p.is_solved && !isTestPuzzle) || h?.status === 'SolvedByUs' || h?.status === 'SolvedByOther';
+                        const isSolved = p.is_solved || h?.status === 'SolvedByUs' || h?.status === 'SolvedByOther';
                         const hasPubkey = Boolean(p.pubkey_hex && p.pubkey_hex.trim().length === 66);
 
                         return (
@@ -728,11 +837,6 @@ export const App: React.FC = () => {
                                 <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-800 text-slate-300 border border-slate-700">
                                   {p.bits}-bit
                                 </span>
-                                {isTestPuzzle && (
-                                  <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
-                                    TEST
-                                  </span>
-                                )}
                               </div>
                             </td>
 

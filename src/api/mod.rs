@@ -42,8 +42,9 @@ pub fn create_router(manager: SharedManager) -> Router {
         .route("/api/health", get(health))
         .route("/api/auth/login", post(auth::login_handler))
         .route("/api/auth/verify", get(auth::verify_handler))
-        // System Config
+        // System Config & Hardware Metrics
         .route("/api/config", get(get_config))
+        .route("/api/system/metrics", get(get_system_metrics))
         // Puzzle CRUD (PostgreSQL)
         .route("/api/puzzles", get(list_puzzles))
         .route("/api/puzzles", post(create_puzzle))
@@ -99,6 +100,14 @@ async fn get_config() -> (StatusCode, Json<Value>) {
             "rpc_url": rpc,
             "device_mode": mode
         })),
+    )
+}
+
+async fn get_system_metrics(State(manager): State<SharedManager>) -> (StatusCode, Json<Value>) {
+    let metrics = manager.monitor.get_latest();
+    (
+        StatusCode::OK,
+        Json(serde_json::to_value(&metrics).unwrap_or(json!({}))),
     )
 }
 
@@ -397,7 +406,15 @@ async fn handle_socket(socket: WebSocket, manager: SharedManager) {
     let (mut sender, mut receiver) = socket.split();
     let mut rx = manager.ws_tx.subscribe();
 
-    // 1. Kirim state awal semua puzzle hunter saat baru terkoneksi
+    // 1. Kirim metrik sistem hardware (CPU & RAM) terkini saat baru terkoneksi
+    let metrics = manager.monitor.get_latest();
+    if let Ok(json_str) = serde_json::to_string(&metrics) {
+        if sender.send(WsMessage::Text(json_str)).await.is_err() {
+            return;
+        }
+    }
+
+    // 2. Kirim state awal semua puzzle hunter saat baru terkoneksi
     let all_states = manager.get_all_states();
     for st in all_states {
         if let Ok(json_str) = serde_json::to_string(&st) {

@@ -24,6 +24,7 @@ import {
   HunterState,
   Puzzle,
   ScannedWindow,
+  SystemMetrics,
   formatLargeNumber,
   formatCompactKeys,
   formatBigIntCompact,
@@ -38,6 +39,7 @@ import { getAudioContext } from '../sound';
 interface PuzzleDetailPageProps {
   puzzle: Puzzle;
   hunter?: HunterState;
+  systemMetrics?: SystemMetrics | null;
   destinationAddress: string;
   onBack: () => void;
   onRefresh: () => void;
@@ -46,6 +48,7 @@ interface PuzzleDetailPageProps {
 export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
   puzzle,
   hunter,
+  systemMetrics,
   destinationAddress,
   onBack,
   onRefresh,
@@ -77,8 +80,7 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
 
   const isRunning = hunter?.status === 'Running';
   const isPausing = hunter?.status === 'Pausing';
-  const isTestPuzzle = puzzle.puzzle_number === 30 || puzzle.puzzle_number === 31;
-  const isSolved = (puzzle.is_solved && !isTestPuzzle) || hunter?.status === 'SolvedByUs' || hunter?.status === 'SolvedByOther';
+  const isSolved = puzzle.is_solved || hunter?.status === 'SolvedByUs' || hunter?.status === 'SolvedByOther';
 
   // Perhitungan total keys dari perkalian block / window
   const isPubkeyExposed = Boolean(puzzle.pubkey_hex && puzzle.pubkey_hex.trim().length === 66);
@@ -169,8 +171,8 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
       const keysLabel = keysInWindow >= 1_000_000_000
         ? `${(keysInWindow / 1_000_000_000).toFixed(2)}B keys`
         : keysInWindow >= 1_000_000
-        ? `${(keysInWindow / 1_000_000).toFixed(1)}M keys`
-        : `${keysInWindow.toLocaleString()} keys`;
+          ? `${(keysInWindow / 1_000_000).toFixed(1)}M keys`
+          : `${keysInWindow.toLocaleString()} keys`;
       const newLog = `[${now}] Ronde #${hunter.round} | ${keysLabel} | Speed: ${speed} | Window: ${hunter.last_window_hex} | MISS`;
       setLogs((prev) => {
         if (prev[prev.length - 1] === newLog) return prev;
@@ -403,12 +405,12 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
         const parsed = parseWindowHexRange(hunter.last_window_hex);
         const liveProgress = parsed.startHex
           ? calculateWindowRangeProgress(
-              parsed.startHex,
-              parsed.endHex || parsed.startHex,
-              puzzle.range_start_hex,
-              puzzle.range_end_hex,
-              4
-            )
+            parsed.startHex,
+            parsed.endHex || parsed.startHex,
+            puzzle.range_start_hex,
+            puzzle.range_end_hex,
+            4
+          )
           : null;
 
         // Ambil jumlah thread/worker aktif (dari active_workers atau parse regex "⚡ N threads")
@@ -521,7 +523,7 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
                 <span className={`w-2.5 h-2.5 rounded-full animate-ping ${isGpuMode ? 'bg-purple-400' : 'bg-amber-400'}`}></span>
                 {isGpuMode
                   ? "Window Sedang Diperiksa (CUDA Multi-Grid Kangaroo O(√N)):"
-                  : "Window Sedang Diperiksa (Pollard's Kangaroo O(√N)):"}
+                  : "Window Sedang Diperiksa:"}
               </span>
               <div className="flex items-center gap-2 sm:gap-3 text-[11px] text-slate-400 flex-wrap">
                 {/* Mode Komputasi (Local / VPS / GPU CUDA) */}
@@ -554,9 +556,40 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
                   </span>
                 )}
 
-                {hunter.round > 0 && hunter.total_keys_checked > 0 && (
-                  <span className="bg-slate-900 px-2 py-0.5 rounded-lg border border-slate-800">
-                    ~{formatLargeNumber(Math.round(hunter.total_keys_checked / hunter.round))} keys/ronde
+                {hunter.window_keys ? (
+                  <span
+                    className="bg-slate-900 px-2.5 py-0.5 rounded-lg border border-slate-800 flex items-center gap-1.5 font-mono text-[11px]"
+                    title={`Ukuran window presisi: 2^${hunter.window_bits} (${hunter.window_keys.toLocaleString()} keys/worker). Total per ronde: ${(hunter.keys_per_round || hunter.window_keys * (hunter.active_workers || 1)).toLocaleString()} keys.`}
+                  >
+                    <span className="text-slate-400 font-sans">Window:</span>
+                    <span className="text-amber-400 font-bold">
+                      {hunter.window_keys >= 1_000_000_000
+                        ? `${(hunter.window_keys / 1_000_000_000).toFixed(2)}B keys/worker`
+                        : `${(hunter.window_keys / 1_000).toFixed(0)}K keys/worker`}
+                    </span>
+                    <span className="text-slate-500 font-sans">
+                      (2^{hunter.window_bits}) • Total: {formatLargeNumber(hunter.keys_per_round || hunter.window_keys * (hunter.active_workers || 1))} keys/ronde
+                    </span>
+                  </span>
+                ) : hunter.round > 0 && hunter.total_keys_checked > 0 ? (
+                  <span className="bg-slate-900 px-2 py-0.5 rounded-lg border border-slate-800 font-mono text-[11px]">
+                    {formatLargeNumber(Math.round(hunter.total_keys_checked / hunter.round))} keys/worker
+                  </span>
+                ) : null}
+
+                {systemMetrics && (
+                  <span
+                    className={`px-2 py-0.5 rounded-lg border flex items-center gap-1.5 font-bold font-mono text-[11px] transition ${
+                      systemMetrics.cpu_usage_pct >= 85
+                        ? 'bg-rose-500/15 text-rose-300 border-rose-500/30'
+                        : systemMetrics.cpu_usage_pct >= 50
+                        ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                        : 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                    }`}
+                    title={`Host CPU: ${systemMetrics.cpu_brand} (${systemMetrics.cpu_cores} Cores)\nRAM: ${(systemMetrics.memory_used_mb / 1024).toFixed(1)} / ${(systemMetrics.memory_total_mb / 1024).toFixed(1)} GB`}
+                  >
+                    <Activity className="w-3 h-3 animate-pulse" />
+                    <span>CPU: {systemMetrics.cpu_usage_pct.toFixed(1)}%</span>
                   </span>
                 )}
                 <span>{hunter.last_check_at}</span>
@@ -598,6 +631,65 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
               </div>
             )}
 
+            {/* Panel Khusus CPU Hardware Telemetry jika Mode CPU Aktif */}
+            {!isGpuMode && systemMetrics && (
+              <div className="mb-3 bg-gradient-to-r from-blue-950/40 via-slate-900/80 to-amber-950/20 p-3 rounded-xl border border-blue-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-md shadow-blue-950/20">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-blue-500/20 text-blue-300 rounded-lg border border-blue-500/30 shrink-0">
+                    <Cpu className="w-5 h-5 text-blue-400" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-extrabold text-sm text-white tracking-wide">
+                        {systemMetrics.cpu_brand}
+                      </span>
+                      <span className="px-2 py-0.5 bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 text-[10px] font-bold rounded-full flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></span>
+                        LIVE TELEMETRY
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 text-[11px] text-slate-400 mt-0.5 flex-wrap">
+                      <span>Arsitektur: <strong className="text-blue-300 font-mono">{systemMetrics.cpu_cores} Cores</strong></span>
+                      {systemMetrics.cpu_freq_mhz > 0 && (
+                        <>
+                          <span>•</span>
+                          <span>Clock: <strong className="text-amber-300 font-mono">{systemMetrics.cpu_freq_mhz} MHz</strong></span>
+                        </>
+                      )}
+                      <span>•</span>
+                      <span>RAM: <strong className="text-cyan-300 font-mono">{(systemMetrics.memory_used_mb / 1024).toFixed(1)} GB / {(systemMetrics.memory_total_mb / 1024).toFixed(0)} GB ({systemMetrics.memory_usage_pct.toFixed(0)}%)</strong></span>
+                    </div>
+                  </div>
+                </div>
+                <div className="text-left sm:text-right shrink-0 w-full sm:w-auto">
+                  <div className="flex items-center sm:justify-end gap-2 text-xs font-mono font-bold">
+                    <span className="text-slate-400 text-[11px]">Realtime Load:</span>
+                    <span className={
+                      systemMetrics.cpu_usage_pct >= 85
+                        ? 'text-rose-400'
+                        : systemMetrics.cpu_usage_pct >= 50
+                        ? 'text-amber-400'
+                        : 'text-emerald-400'
+                    }>
+                      {systemMetrics.cpu_usage_pct.toFixed(1)}%
+                    </span>
+                  </div>
+                  <div className="w-full sm:w-36 bg-slate-950 rounded-full h-1.5 mt-1 border border-slate-800 overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all duration-700 ease-out ${
+                        systemMetrics.cpu_usage_pct >= 85
+                          ? 'bg-rose-500'
+                          : systemMetrics.cpu_usage_pct >= 50
+                          ? 'bg-amber-500'
+                          : 'bg-emerald-400'
+                      }`}
+                      style={{ width: `${Math.min(100, Math.max(0, systemMetrics.cpu_usage_pct))}%` }}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
             <div className="bg-slate-900/80 p-3 rounded-xl border border-slate-800 space-y-2.5">
               <div className="font-mono text-xs sm:text-sm text-slate-200 break-all select-all">
                 {hunter.last_window_hex}
@@ -633,11 +725,10 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
                 <div className="flex items-center justify-between text-[11px] text-slate-400">
                   <span className="flex items-center gap-1.5 text-slate-300 font-medium">
                     <span>Posisi di Keseluruhan Range Target:</span>
-                    <span className={`font-bold font-mono px-2 py-0.5 rounded border ${
-                      isGpuMode
-                        ? 'text-purple-300 bg-purple-500/15 border-purple-500/30'
-                        : 'text-amber-400 bg-amber-500/10 border-amber-500/20'
-                    }`}>
+                    <span className={`font-bold font-mono px-2 py-0.5 rounded border ${isGpuMode
+                      ? 'text-purple-300 bg-purple-500/15 border-purple-500/30'
+                      : 'text-amber-400 bg-amber-500/10 border-amber-500/20'
+                      }`}>
                       {coresList.length > 1
                         ? isGpuMode
                           ? `${coresList.length} Parallel CUDA Streams (SM Multi-Grid)`
@@ -653,9 +744,8 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
                 {/* Track Indikator Multi-Core / CUDA Stream Titik Lokasi Jump */}
                 <div className="relative w-full pt-8 pb-5">
                   {/* Track base */}
-                  <div className={`w-full bg-slate-950 rounded-full h-3 border relative overflow-hidden shadow-inner ${
-                    isGpuMode ? 'border-purple-500/30' : 'border-slate-800'
-                  }`}>
+                  <div className={`w-full bg-slate-950 rounded-full h-3 border relative overflow-hidden shadow-inner ${isGpuMode ? 'border-purple-500/30' : 'border-slate-800'
+                    }`}>
                     {/* Tick mark pembagi kuadran: 25%, 50%, 75% */}
                     <div className={`absolute left-1/4 top-0 bottom-0 w-px ${isGpuMode ? 'bg-purple-900/50' : 'bg-slate-800/80'}`} />
                     <div className={`absolute left-2/4 top-0 bottom-0 w-px ${isGpuMode ? 'bg-purple-900/50' : 'bg-slate-800/80'}`} />
@@ -665,11 +755,10 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
                     {coresList.map((core) => (
                       <div
                         key={`track-range-${core.coreId}`}
-                        className={`absolute top-0 bottom-0 rounded-full transition-all duration-700 ease-out ${
-                          isGpuMode
-                            ? 'bg-purple-400/50 border border-purple-300/40 shadow-sm shadow-purple-500/30'
-                            : 'bg-amber-400/40'
-                        }`}
+                        className={`absolute top-0 bottom-0 rounded-full transition-all duration-700 ease-out ${isGpuMode
+                          ? 'bg-purple-400/50 border border-purple-300/40 shadow-sm shadow-purple-500/30'
+                          : 'bg-amber-400/40'
+                          }`}
                         style={{
                           left: `${Math.max(0, Math.min(98, core.progress.startPct))}%`,
                           width: `${Math.max(1.5, Math.min(100 - core.progress.startPct, Math.max(1.5, core.progress.endPct - core.progress.startPct)))}%`,
@@ -691,11 +780,10 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
                       >
                         {/* Badge nomor core & persentase jump di atas pin */}
                         <div
-                          className={`absolute ${isAlt ? '-top-6' : '-top-8'} transition-transform group-hover:scale-110 px-1.5 py-0.5 rounded-md bg-slate-950/95 border text-[9px] font-mono font-bold whitespace-nowrap shadow-md shadow-black/80 flex items-center gap-1 z-20 pointer-events-none ${
-                            isGpuMode
-                              ? 'border-purple-500/60 text-purple-300 shadow-purple-950/40'
-                              : 'border-amber-500/50 text-amber-300'
-                          }`}
+                          className={`absolute ${isAlt ? '-top-6' : '-top-8'} transition-transform group-hover:scale-110 px-1.5 py-0.5 rounded-md bg-slate-950/95 border text-[9px] font-mono font-bold whitespace-nowrap shadow-md shadow-black/80 flex items-center gap-1 z-20 pointer-events-none ${isGpuMode
+                            ? 'border-purple-500/60 text-purple-300 shadow-purple-950/40'
+                            : 'border-amber-500/50 text-amber-300'
+                            }`}
                         >
                           <span className={`w-1.5 h-1.5 rounded-full animate-pulse ${isGpuMode ? 'bg-purple-400' : 'bg-amber-400'}`}></span>
                           <span>{isGpuMode ? `S${core.coreId}` : `C${core.coreId}`}: {core.progress.startFormatted}</span>
@@ -704,16 +792,14 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
                         {/* Animasi Ping & Glowing Dot */}
                         <div className="relative flex items-center justify-center">
                           <span
-                            className={`absolute w-5 h-5 rounded-full animate-ping ${
-                              isGpuMode ? 'bg-purple-400/35' : 'bg-amber-400/35'
-                            }`}
+                            className={`absolute w-5 h-5 rounded-full animate-ping ${isGpuMode ? 'bg-purple-400/35' : 'bg-amber-400/35'
+                              }`}
                             style={{ animationDuration: `${1.1 + (idx % 4) * 0.3}s` }}
                           />
-                          <span className={`relative w-3.5 h-3.5 rounded-full border-2 border-slate-950 shadow-md flex items-center justify-center ${
-                            isGpuMode
-                              ? 'bg-gradient-to-b from-purple-200 via-purple-500 to-indigo-700 shadow-purple-500/80 ring-1 ring-purple-300/80'
-                              : 'bg-gradient-to-b from-amber-200 via-amber-400 to-amber-600 shadow-amber-400/80 ring-1 ring-amber-300/80'
-                          }`}>
+                          <span className={`relative w-3.5 h-3.5 rounded-full border-2 border-slate-950 shadow-md flex items-center justify-center ${isGpuMode
+                            ? 'bg-gradient-to-b from-purple-200 via-purple-500 to-indigo-700 shadow-purple-500/80 ring-1 ring-purple-300/80'
+                            : 'bg-gradient-to-b from-amber-200 via-amber-400 to-amber-600 shadow-amber-400/80 ring-1 ring-amber-300/80'
+                            }`}>
                             <span className="text-[7.5px] font-extrabold text-slate-950 font-mono leading-none">
                               {core.coreId}
                             </span>
@@ -757,11 +843,10 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
                       {coresList.map((core) => (
                         <div
                           key={`pill-${core.coreId}`}
-                          className={`p-1.5 bg-slate-950/90 rounded-lg border transition-colors flex flex-col items-center text-center group ${
-                            isGpuMode
-                              ? 'border-slate-800/90 hover:border-purple-500/50'
-                              : 'border-slate-800/90 hover:border-amber-500/50'
-                          }`}
+                          className={`p-1.5 bg-slate-950/90 rounded-lg border transition-colors flex flex-col items-center text-center group ${isGpuMode
+                            ? 'border-slate-800/90 hover:border-purple-500/50'
+                            : 'border-slate-800/90 hover:border-amber-500/50'
+                            }`}
                           title={isGpuMode ? `CUDA Stream ${core.coreId} (SM Grid): ${core.startHex}..${core.endHex}` : `Core ${core.coreId}: ${core.startHex}..${core.endHex}`}
                         >
                           <div className={`flex items-center gap-1 text-[9px] font-bold mb-0.5 ${isGpuMode ? 'text-purple-300' : 'text-amber-400'}`}>

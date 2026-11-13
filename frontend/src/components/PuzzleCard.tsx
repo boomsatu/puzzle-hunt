@@ -38,8 +38,7 @@ export const PuzzleCard: React.FC<PuzzleCardProps> = ({ puzzle, hunter, destinat
 
   const isRunning = hunter?.status === 'Running';
   const isPausing = hunter?.status === 'Pausing';
-  const isTestPuzzle = puzzle.puzzle_number === 30 || puzzle.puzzle_number === 31;
-  const isSolved = (puzzle.is_solved && !isTestPuzzle) || hunter?.status === 'SolvedByUs' || hunter?.status === 'SolvedByOther';
+  const isSolved = puzzle.is_solved || hunter?.status === 'SolvedByUs' || hunter?.status === 'SolvedByOther';
 
   const handleStart = async () => {
     setLoading(true);
@@ -113,11 +112,6 @@ export const PuzzleCard: React.FC<PuzzleCardProps> = ({ puzzle, hunter, destinat
             <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-800 text-slate-300">
               {puzzle.bits}-bit
             </span>
-            {isTestPuzzle && (
-              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/40">
-                🧪 TEST
-              </span>
-            )}
             {isSolved ? (
               <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
                 <CheckCircle className="w-3 h-3" /> SOLVED

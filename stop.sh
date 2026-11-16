@@ -23,9 +23,11 @@ echo -e "${RED}╚════════════════════�
 echo ""
 
 # ────────────────────────────────────────────────────────────────
-# 1. Stop Backend
+# 1. Stop Backend & Solvers
 # ────────────────────────────────────────────────────────────────
-echo "[BACKEND] Stopping puzzle-hunt..."
+echo "[BACKEND] Stopping puzzle-hunt & kangaroo solvers..."
+pkill -9 -f kangaroo 2>/dev/null || true
+pkill -9 -f puzzle-hunt 2>/dev/null || true
 if [ -f "$BACKEND_PID_FILE" ]; then
     PID=$(cat "$BACKEND_PID_FILE")
     if kill -0 "$PID" 2>/dev/null; then

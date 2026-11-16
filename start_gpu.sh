@@ -61,7 +61,9 @@ echo -e "${YELLOW}💡 Tip: Sambungkan Vercel dengan menyetel VITE_API_URL=http:
 
 if [ "$1" == "--daemon" ] || [ "$1" == "-d" ]; then
     mkdir -p logs
-    pkill -f puzzle-hunt 2>/dev/null || true
+    # Bunuh backend lama dan semua proses solver kangaroo yang tersisa/zombie
+    pkill -9 -f kangaroo 2>/dev/null || true
+    pkill -9 -f puzzle-hunt 2>/dev/null || true
     sleep 1
     nohup ./target/release/puzzle-hunt > logs/backend.log 2>&1 &
     PID=$!
@@ -71,6 +73,10 @@ if [ "$1" == "--daemon" ] || [ "$1" == "-d" ]; then
     echo -e "${CYAN}   - Pantau log live : tail -f logs/backend.log${NC}"
     echo -e "${CYAN}   - Hentikan        : bash stop.sh (atau kill $PID)${NC}"
 else
+    # Bersihkan solver kangaroo sebelum menjalankan foreground
+    pkill -9 -f kangaroo 2>/dev/null || true
+    pkill -9 -f puzzle-hunt 2>/dev/null || true
+    sleep 1
     echo -e "${YELLOW}⚠️  PERHATIAN: Saat ini berjalan di FOREGROUND (jika terminal SSH ditutup, backend akan BERHENTI).${NC}"
     echo -e "${YELLOW}   Agar aman menutup terminal & jalan 24 jam nonstop di background, gunakan:${NC}"
     echo -e "   👉 ${GREEN}bash start_gpu.sh --daemon${NC}  (atau gunakan ${GREEN}tmux${NC})"

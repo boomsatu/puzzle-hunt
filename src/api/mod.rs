@@ -97,6 +97,9 @@ async fn get_config() -> (StatusCode, Json<Value>) {
         .to_lowercase();
     let fee_rate = std::env::var("PRIORITY_FEE_RATE")
         .unwrap_or_else(|_| "350".to_string());
+    let search_strategy = std::env::var("SEARCH_STRATEGY")
+        .unwrap_or_else(|_| "stratified".to_string())
+        .to_lowercase();
 
     (
         StatusCode::OK,
@@ -105,7 +108,8 @@ async fn get_config() -> (StatusCode, Json<Value>) {
             "rpc_url": rpc,
             "device_mode": mode,
             "broadcast_mode": broadcast_mode,
-            "priority_fee_rate": fee_rate
+            "priority_fee_rate": fee_rate,
+            "search_strategy": search_strategy
         })),
     )
 }

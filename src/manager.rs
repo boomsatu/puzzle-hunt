@@ -504,17 +504,36 @@ async fn run_hunt_loop(
         // Tentukan jumlah worker thread dinamis sesuai device mode (local, vps, gpu)
         let num_workers = get_optimal_workers(&states, device_mode);
 
-        // Ambil batch window dengan prioritas: WAJIB scan range awal terlebih dahulu, baru random jump!
+        let search_strategy = std::env::var("SEARCH_STRATEGY")
+            .unwrap_or_else(|_| "stratified".to_string())
+            .to_lowercase();
+
+        // Ambil batch window dengan strategi terpilih:
+        // - 'stratified' (default): Membagi keyspace rata ke 16 sektor dari ujung kiri (0%) sampai ujung kanan (100%),
+        //   sehingga worker tersebar rapi, pinggir kiri & pinggir kanan selalu aktif, dan tidak pernah menumpuk di tengah.
+        // - 'random': Lompatan acak bebas ke seluruh keyspace.
         let mut batch_windows = Vec::with_capacity(num_workers);
-        for _ in 0..num_workers {
-            let (window_id, w_start, w_end) = pick_window_smart(
-                &full_start,
-                &effective_end,
-                &window_size,
-                &max_window_id,
-                &scanned,
-                num_workers as u64,
-            );
+        for w_idx in 0..num_workers {
+            let (window_id, w_start, w_end) = if search_strategy == "random" {
+                pick_window_smart(
+                    &full_start,
+                    &effective_end,
+                    &window_size,
+                    &max_window_id,
+                    &scanned,
+                    num_workers as u64,
+                )
+            } else {
+                pick_window_stratified(
+                    w_idx,
+                    num_workers,
+                    &full_start,
+                    &effective_end,
+                    &window_size,
+                    &max_window_id,
+                    &scanned,
+                )
+            };
             insert_sorted(&mut scanned, (w_start.clone(), w_end.clone()));
             batch_windows.push((window_id, w_start, w_end));
         }
@@ -821,6 +840,76 @@ async fn run_hunt_loop(
 }
 
 // ===== Utility Helpers =====
+
+/// Memilih window berikutnya dengan strategi "Stratified Grid Partitioning (Zonasi Merata)":
+/// Membagi seluruh ruang kunci secara proporsional ke `num_workers` sektor (misal 16 sektor).
+/// - Worker #1 fokus di sektor 0 (pinggir kiri: 0% - 6.25%)
+/// - Worker #16 fokus di sektor 15 (pinggir kanan: 93.75% - 100%)
+/// - Worker lainnya tersebar merata di sektor masing-masing.
+/// Menjamin seluruh spektrum selalu aktif digempur, pinggir-pinggir tercover konsisten, dan tidak ada worker yang menumpuk di tengah.
+fn pick_window_stratified(
+    worker_idx: usize,
+    num_workers: usize,
+    full_start: &BigUint,
+    full_end: &BigUint,
+    window_size: &BigUint,
+    max_window_id: &BigUint,
+    scanned: &[(BigUint, BigUint)],
+) -> (i64, BigUint, BigUint) {
+    let total_wins = max_window_id + BigUint::one();
+    let num_w = BigUint::from(num_workers.max(1));
+    let wins_per_worker = &total_wins / &num_w;
+
+    let w_idx = BigUint::from(worker_idx);
+    let zone_start_wid = &w_idx * &wins_per_worker;
+    let zone_end_wid = if worker_idx + 1 >= num_workers {
+        max_window_id.clone()
+    } else {
+        (&zone_start_wid + &wins_per_worker - BigUint::one()).min(max_window_id.clone())
+    };
+
+    // Prioritas 1: Pastikan titik awal dari zona ini (termasuk window #0 di pinggir kiri) discan terlebih dahulu
+    let ws_init = full_start + (&zone_start_wid * window_size);
+    let we_init = (&ws_init + window_size - BigUint::one()).min(full_end.clone());
+    if !is_range_scanned(&ws_init, &we_init, scanned) {
+        let wid = zone_start_wid.to_u64_digits().first().copied().unwrap_or(0) as i64;
+        return (wid, ws_init, we_init);
+    }
+
+    // Prioritas 2: Lompatan acak terzonasi (Stratified Random Jump) di dalam zona masing-masing
+    let zone_span = if zone_end_wid >= zone_start_wid {
+        &zone_end_wid - &zone_start_wid + BigUint::one()
+    } else {
+        BigUint::one()
+    };
+
+    let mut rng = rand::thread_rng();
+    for _ in 0..100 {
+        let offset = rng.gen_biguint_range(&BigUint::zero(), &zone_span);
+        let cand = &zone_start_wid + offset;
+        let ws = full_start + (&cand * window_size);
+        let we = (&ws + window_size - BigUint::one()).min(full_end.clone());
+        if !is_range_scanned(&ws, &we, scanned) {
+            let wid = cand.to_u64_digits().first().copied().unwrap_or(0) as i64;
+            return (wid, ws, we);
+        }
+    }
+
+    // Fallback linear jika pencarian acak dalam zona berulang kali bentrok
+    let mut cand = zone_start_wid.clone();
+    while cand <= zone_end_wid {
+        let ws = full_start + (&cand * window_size);
+        let we = (&ws + window_size - BigUint::one()).min(full_end.clone());
+        if !is_range_scanned(&ws, &we, scanned) {
+            let wid = cand.to_u64_digits().first().copied().unwrap_or(0) as i64;
+            return (wid, ws, we);
+        }
+        cand += BigUint::one();
+    }
+
+    // Fallback terakhir: acak bebas di seluruh keyspace
+    pick_random_window(full_start, full_end, window_size, max_window_id, scanned)
+}
 
 /// Memilih window berikutnya dengan strategi "Range Awal Terlebih Dahulu, Lalu Random Jump":
 /// 1. Jika range awal (Window #0, #1, s/d `num_initial_priority - 1`) belum tercatat di riwayat PostgreSQL,

@@ -753,7 +753,7 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
                       }`}>
                       {coresList.length > 1
                         ? isGpuMode
-                          ? `${coresList.length} Parallel CUDA Streams (SM Multi-Grid)`
+                          ? `${coresList.length} Parallel CUDA Streams (Stratified 16-Zone Grid)`
                           : `${coresList.length} Titik Core Jump (Multi-Thread)`
                         : coresList[0]?.progress.display}
                     </span>
@@ -838,7 +838,7 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
                 <div className="flex justify-between text-[9px] text-slate-500 font-mono">
                   <span>0% ({puzzle.range_start_hex ? puzzle.range_start_hex.slice(0, 10) + '...' : 'Start'})</span>
                   <span className={`font-bold font-sans flex items-center gap-1 ${isGpuMode ? 'text-purple-400' : 'text-amber-400'}`}>
-                    <span>{isGpuMode ? `🚀 ${coresList.length} Parallel CUDA Streams Aktif (RTX 6000)` : `📍 ${coresList.length} Titik Jump Aktif`}</span>
+                    <span>{isGpuMode ? `🚀 ${coresList.length} Parallel CUDA Streams Aktif (Stratified 16-Zone Grid)` : `📍 ${coresList.length} Titik Jump Aktif`}</span>
                   </span>
                   <span>100% ({puzzle.range_end_hex ? puzzle.range_end_hex.slice(0, 10) + '...' : 'End'})</span>
                 </div>

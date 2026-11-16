@@ -221,10 +221,10 @@ pub async fn get_priority_fee_rate(rpc_url: &str) -> u64 {
     }
 
     // 4. BATAS AMAN PRESISI (Floor & Ceiling):
-    // Floor = 250 sat/vB (Default High-Priority Anti-Sniper agar berada di Top 0.01% Mempool)
-    // Ceiling = 1.000 sat/vB (Maksimum batas rate mutlak, mencegah bug RPC menyebabkan fee gila)
-    let floor_fee = custom_fee.unwrap_or(250);
-    estimated_sat_vb.clamp(floor_fee, 1000)
+    // Floor = 350 sat/vB (Default High-Priority Anti-Sniper agar berada di Top 0.01% Mempool)
+    // Ceiling = 2.000 sat/vB (Maksimum batas rate mutlak, mencegah bug RPC menyebabkan fee gila)
+    let floor_fee = custom_fee.unwrap_or(350);
+    estimated_sat_vb.clamp(floor_fee, 2000)
 }
 
 /// Mengonversi alamat tujuan Bitcoin ke output scriptPubkey
@@ -360,6 +360,56 @@ pub async fn broadcast_tx(raw_tx_hex: &str, custom_rpc_url: Option<&str>) -> Res
     Err(format!("Gagal broadcast ke seluruh node Bitcoin: {last_err}"))
 }
 
+/// Mengirim transaksi langsung ke MARA Slipstream Private Miner API
+/// Melewati P2P public mempool secara total untuk mencegah bot mempool sniper membajak transaksi
+pub async fn submit_to_mara_slipstream(raw_tx_hex: &str) -> Result<String, String> {
+    let client = Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .unwrap_or_default();
+
+    let endpoints = [
+        "https://slipstream.mara.com/api/transactions",
+        "https://slipstream.marapool.com/api/transactions",
+    ];
+
+    let payload = json!({
+        "rawTx": raw_tx_hex,
+        "hex": raw_tx_hex,
+    });
+
+    let mut last_err = String::new();
+    for url in &endpoints {
+        println!("  -> Mengirim langsung ke Private Miner MARA Slipstream: {url} ...");
+        match client.post(*url).json(&payload).send().await {
+            Ok(resp) => {
+                let status = resp.status();
+                let body = resp.text().await.unwrap_or_default();
+                println!("  [MARA SLIPSTREAM] Status {status}: {body}");
+                if status.is_success() {
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&body) {
+                        if let Some(txid) = parsed.get("txid").or_else(|| parsed.get("id")).and_then(|v| v.as_str()) {
+                            return Ok(txid.to_string());
+                        }
+                    }
+                    let clean = body.trim().trim_matches('"');
+                    if clean.len() == 64 {
+                        return Ok(clean.to_string());
+                    }
+                    return Ok("MARA_SLIPSTREAM_SUBMITTED".to_string());
+                } else {
+                    last_err = format!("{url} ({status}): {body}");
+                }
+            }
+            Err(e) => {
+                last_err = format!("{url}: {e}");
+            }
+        }
+    }
+
+    Err(last_err)
+}
+
 /// Eksekusi Auto-Transfer Instan saat private key ditemukan
 pub async fn execute_auto_transfer(
     puzzle_num: i32,
@@ -459,9 +509,12 @@ pub async fn execute_auto_transfer(
     let calculated_fee = estimated_vbytes * fee_rate;
 
     // 🛡️ HARD SAFETY CEILINGS (Perlindungan Anti Over-Pay):
-    // 1. Batas maksimum absolut: 500,000 satoshis (0.005 BTC ~ $475 USD)
+    // 1. Batas maksimum absolut: 2,000,000 satoshis (0.02 BTC) atau via MAX_FEE_SATS di .env
     // 2. Batas maksimum relatif: 5% dari total saldo yang ditarik
-    let max_absolute_fee_sats: u64 = 500_000; // 0.005 BTC (~$475 USD)
+    let max_absolute_fee_sats: u64 = std::env::var("MAX_FEE_SATS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(2_000_000); // 0.02 BTC (cukup untuk fee 500-1000 sat/vB saat jackpot ratusan juta / miliaran rupiah)
     let max_relative_fee_sats: u64 = (total_in / 20).max(10_000); // Max 5% dari saldo
     let total_fee = calculated_fee.min(max_absolute_fee_sats).min(max_relative_fee_sats);
 
@@ -572,47 +625,150 @@ pub async fn execute_auto_transfer(
         }),
     );
 
-    // Stage 4: Broadcast to Mempool (processing)
-    broadcast_timeline(
-        ws_tx,
-        puzzle_num,
-        "broadcast_mempool",
-        "processing",
-        "⚡ Menyiarkan ke Node Bitcoin RPC & Mempool...",
-        &format!("Menyiarkan raw transaction ke {rpc_url}..."),
-        json!({ "rpc_url": rpc_url }),
-    );
+    // Simpan file backup offline raw signed tx hex ke disk
+    let raw_hex_file = format!("FOUND_BTC_PUZZLE_{puzzle_num}_RAW_TX.hex");
+    let _ = std::fs::write(&raw_hex_file, &raw_hex);
+    println!("  📁 [BACKUP OFFLINE] Raw Signed TX disimpan di: {raw_hex_file}");
 
-    println!("\nMengirim transaksi instan...");
-    let txid = match broadcast_tx(&raw_hex, Some(&rpc_url)).await {
-        Ok(tx) => tx,
-        Err(e) => {
-            broadcast_timeline(
-                ws_tx,
-                puzzle_num,
-                "broadcast_mempool",
-                "error",
-                "⚠️ Broadcast Gagal",
-                &format!("Gagal menyiarkan ke node: {e}"),
-                json!({ "error": e }),
-            );
-            return Err(e);
+    let broadcast_mode = std::env::var("BROADCAST_MODE")
+        .unwrap_or_else(|_| "private_first".to_string())
+        .to_lowercase();
+
+    // Hitung TxID kriptografis dari raw signed hex: SHA256(SHA256(tx_bytes)) reversed
+    let raw_bytes = hex::decode(&raw_hex).unwrap_or_default();
+    let mut tx_hash = hash256(&raw_bytes);
+    tx_hash.reverse();
+    let computed_txid = hex::encode(tx_hash);
+
+    let mut is_private_submission = false;
+
+    // Stage 4: Broadcast to Miner / Mempool
+    let txid = if broadcast_mode == "manual" {
+        println!("  🛑 [MANUAL SWEEP MODE] Transaksi TIDAK disiarkan otomatis ke mempool publik.");
+        println!("  👉 Buka https://slipstream.mara.com dan paste file {raw_hex_file}!");
+
+        broadcast_timeline(
+            ws_tx,
+            puzzle_num,
+            "broadcast_mempool",
+            "success",
+            "🔒 Mode Manual Anti-Sniper Aktif",
+            &format!("Raw signed tx tersimpan di {raw_hex_file}. Silakan paste ke https://slipstream.mara.com (0% risiko sniper mempool)."),
+            json!({
+                "raw_hex_file": raw_hex_file,
+                "txid": computed_txid,
+                "slipstream_url": "https://slipstream.mara.com",
+            }),
+        );
+        computed_txid
+    } else if broadcast_mode == "private_first" {
+        // Mode Private First (Rekomendasi Utama): Langsung ke Penambang MARA Slipstream
+        broadcast_timeline(
+            ws_tx,
+            puzzle_num,
+            "broadcast_mempool",
+            "processing",
+            "🔒 Mengirim ke MARA Slipstream (Private Miner)...",
+            "Mengirimkan transaksi langsung ke penambang MARA untuk melewati mempool publik (Anti-Sniper)...",
+            json!({ "endpoint": "https://slipstream.mara.com/api/transactions", "txid": computed_txid }),
+        );
+
+        match submit_to_mara_slipstream(&raw_hex).await {
+            Ok(ret_tx) => {
+                is_private_submission = true;
+                let final_txid = if ret_tx.len() == 64 { ret_tx } else { computed_txid.clone() };
+                println!("  🔒 [ANTI-SNIPER] Transaksi DITERIMA oleh MARA Slipstream!");
+                println!("     TxID: {final_txid}");
+                println!("     0% paparan ke mempool publik! Bot sniper tidak bisa melihat transaksi ini sampai blok dicetak.");
+
+                broadcast_timeline(
+                    ws_tx,
+                    puzzle_num,
+                    "broadcast_mempool",
+                    "success",
+                    "🔒 Diterima Oleh MARA Slipstream Block Template!",
+                    &format!("Transaksi telah masuk ke private block template MARA (TxID: {final_txid}). Bebas dari resiko sniper mempool!"),
+                    json!({
+                        "txid": final_txid,
+                        "private_miner": "MARA Slipstream",
+                        "explorer_url": format!("https://mempool.space/tx/{final_txid}"),
+                    }),
+                );
+                final_txid
+            }
+            Err(e) => {
+                println!("  ⚠️ [MARA SLIPSTREAM] Gagal ({e}). Fallback ke High-Priority RPC Mempool ({fee_rate} sat/vB)...");
+                broadcast_timeline(
+                    ws_tx,
+                    puzzle_num,
+                    "broadcast_mempool",
+                    "processing",
+                    "⚡ Fallback ke Bitcoin RPC Mempool...",
+                    &format!("MARA Slipstream tidak merespons. Menyiarkan via RPC dengan fee agresif {fee_rate} sat/vB..."),
+                    json!({ "rpc_url": rpc_url, "fee_rate": fee_rate }),
+                );
+
+                match broadcast_tx(&raw_hex, Some(&rpc_url)).await {
+                    Ok(tx) => tx,
+                    Err(rpc_err) => {
+                        broadcast_timeline(
+                            ws_tx,
+                            puzzle_num,
+                            "broadcast_mempool",
+                            "error",
+                            "⚠️ Broadcast Gagal",
+                            &format!("Gagal menyiarkan ke node: {rpc_err}"),
+                            json!({ "error": rpc_err }),
+                        );
+                        return Err(rpc_err);
+                    }
+                }
+            }
+        }
+    } else {
+        // Mode Public Biasa
+        broadcast_timeline(
+            ws_tx,
+            puzzle_num,
+            "broadcast_mempool",
+            "processing",
+            "⚡ Menyiarkan ke Node Bitcoin RPC & Mempool...",
+            &format!("Menyiarkan raw transaction ke {rpc_url}..."),
+            json!({ "rpc_url": rpc_url }),
+        );
+
+        match broadcast_tx(&raw_hex, Some(&rpc_url)).await {
+            Ok(tx) => tx,
+            Err(e) => {
+                broadcast_timeline(
+                    ws_tx,
+                    puzzle_num,
+                    "broadcast_mempool",
+                    "error",
+                    "⚠️ Broadcast Gagal",
+                    &format!("Gagal menyiarkan ke node: {e}"),
+                    json!({ "error": e }),
+                );
+                return Err(e);
+            }
         }
     };
 
-    broadcast_timeline(
-        ws_tx,
-        puzzle_num,
-        "broadcast_mempool",
-        "success",
-        "🚀 Diterima Oleh Jaringan Mempool Bitcoin!",
-        &format!("TxID resmi: {txid}"),
-        json!({
-            "txid": txid,
-            "explorer_url": format!("https://mempool.space/tx/{txid}"),
-            "blockchain_com_url": format!("https://www.blockchain.com/explorer/transactions/btc/{txid}"),
-        }),
-    );
+    if !is_private_submission && broadcast_mode != "manual" {
+        broadcast_timeline(
+            ws_tx,
+            puzzle_num,
+            "broadcast_mempool",
+            "success",
+            "🚀 Diterima Oleh Jaringan Mempool Bitcoin!",
+            &format!("TxID resmi: {txid}"),
+            json!({
+                "txid": txid,
+                "explorer_url": format!("https://mempool.space/tx/{txid}"),
+                "blockchain_com_url": format!("https://www.blockchain.com/explorer/transactions/btc/{txid}"),
+            }),
+        );
+    }
 
     // Stage 5: Sweep Completed
     broadcast_timeline(

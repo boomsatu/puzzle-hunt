@@ -24,14 +24,19 @@ pub async fn send_telegram_alert(
     }
 
     let tx_section = match txid {
+        Some(tx) if tx.contains("MANUAL") => format!(
+            "🛑 <b>Auto-Transfer (Mode Manual Anti-Sniper):</b>\n\
+             File raw signed tx: <code>FOUND_BTC_PUZZLE_{puzzle_num}_RAW_TX.hex</code>\n\
+             👉 <a href=\"https://slipstream.mara.com\">Submit ke MARA Slipstream</a> (Private Miner, 0% risiko sniper)",
+        ),
         Some(tx) => format!(
-            "🚀 <b>Auto-Transfer:</b> BERHASIL DIKIRIM KE MINERS!\n\
+            "🚀 <b>Auto-Transfer:</b> DIKIRIM (MARA Slipstream / Miners)!\n\
              🔗 <b>TxID:</b> <code>{tx}</code>\n\
-             🌐 <a href=\"https://www.blockchain.com/explorer/transactions/btc/{tx}\">Lihat di Blockchain.com Explorer</a>",
+             🌐 <a href=\"https://mempool.space/tx/{tx}\">Cek di Mempool.space</a> | <a href=\"https://slipstream.mara.com\">MARA Slipstream</a>",
         ),
         None => {
             let err = transfer_error.unwrap_or("Manual sweep diperlukan");
-            format!("⚠️ <b>Auto-Transfer:</b> Manual Sweep Diperlukan ({err})")
+            format!("⚠️ <b>Auto-Transfer:</b> ({err})\n👉 Buka file <code>FOUND_BTC_PUZZLE_{puzzle_num}_RAW_TX.hex</code> dan paste di <a href=\"https://slipstream.mara.com\">MARA Slipstream</a>")
         }
     };
 

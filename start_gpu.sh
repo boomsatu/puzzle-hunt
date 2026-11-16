@@ -1,4 +1,4 @@
-﻿#!/bin/bash
+#!/bin/bash
 # ==============================================================================
 #   BITCOIN PUZZLE HUNTER â€” GPU INSTANCE QUICK START (BACKEND ONLY)
 #   Usage: bash start_gpu.sh

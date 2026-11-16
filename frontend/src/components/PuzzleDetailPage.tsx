@@ -544,7 +544,9 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
               <span className={`font-semibold uppercase tracking-wider text-[11px] flex items-center gap-1.5 ${isGpuMode ? 'text-purple-300' : 'text-amber-400'}`}>
                 <span className={`w-2.5 h-2.5 rounded-full animate-ping ${isGpuMode ? 'bg-purple-400' : 'bg-amber-400'}`}></span>
                 {isGpuMode
-                  ? "Window Sedang Diperiksa (CUDA Multi-Grid Kangaroo O(√N)):"
+                  ? hunter?.is_kangaroo_mode
+                    ? "Window Sedang Diperiksa (CUDA Multi-Grid Kangaroo O(√N)):"
+                    : "Window Sedang Diperiksa (CUDA Address Scanner cuBitCrack):"
                   : "Window Sedang Diperiksa:"}
               </span>
               <div className="flex items-center gap-2 sm:gap-3 text-[11px] text-slate-400 flex-wrap">
@@ -753,7 +755,7 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
                       }`}>
                       {coresList.length > 1
                         ? isGpuMode
-                          ? `${coresList.length} Parallel CUDA Streams (Stratified 16-Zone Grid)`
+                          ? `${coresList.length} Parallel CUDA Streams (Live SM Grid Dispatch)`
                           : `${coresList.length} Titik Core Jump (Multi-Thread)`
                         : coresList[0]?.progress.display}
                     </span>

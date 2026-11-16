@@ -249,7 +249,8 @@ impl HuntManager {
 
         let p_start = BigUint::parse_bytes(puzzle.range_start_hex.trim_start_matches("0x").as_bytes(), 16).unwrap_or_default();
         let p_end = BigUint::parse_bytes(puzzle.range_end_hex.trim_start_matches("0x").as_bytes(), 16).unwrap_or_default();
-        let num_workers = 16usize;
+        let dev_mode = DeviceMode::from_env();
+        let num_workers = get_optimal_workers(&self.states, dev_mode);
         let step = if &p_end > &p_start {
             (&p_end - &p_start) / BigUint::from(num_workers as u64)
         } else {
@@ -273,12 +274,21 @@ impl HuntManager {
         new_state.started_at = Some(now_str);
         new_state.active_workers = num_workers;
         new_state.active_windows = init_windows;
-        new_state.last_window_hex = format!(
-            "0x{:x}..0x{:x} (⚡ {} Streams GPU Ready)",
-            p_start, p_end, num_workers
-        );
-        new_state.device_mode = "gpu".to_string();
-        new_state.gpu_info = Some(crate::kangaroo::cuda::get_telemetry(num_workers));
+        new_state.last_window_hex = if dev_mode == DeviceMode::Gpu {
+            format!(
+                "0x{:x}..0x{:x} (⚡ {} Streams GPU Ready)",
+                p_start, p_end, num_workers
+            )
+        } else {
+            format!(
+                "0x{:x}..0x{:x} (⚡ {} Workers Ready)",
+                p_start, p_end, num_workers
+            )
+        };
+        new_state.device_mode = dev_mode.as_str().to_string();
+        if dev_mode == DeviceMode::Gpu {
+            new_state.gpu_info = Some(crate::kangaroo::cuda::get_telemetry(num_workers));
+        }
 
         {
             let mut states = self.states.lock().unwrap();
@@ -356,21 +366,13 @@ fn get_optimal_workers(states: &Arc<Mutex<HashMap<i32, HunterState>>>, mode: Dev
             per_puzzle.max(1)
         }
         DeviceMode::Gpu => {
-            // Mode GPU: Ambil dari GPU_WORKERS di .env jika ada,
-            // atau otomatis sesuaikan dengan kapasitas core CPU host:
-            // Pada server 48-Core AMD EPYC, gunakan 32 workers agar throughput GPU melonjak ke ~200+ B k/s!
+            // Mode GPU: Ambil dari GPU_WORKERS di .env jika ada (default: 16 worker agar 16 SM stream cards di dashboard terisi penuh)
             if let Ok(workers_str) = std::env::var("GPU_WORKERS") {
                 if let Ok(w) = workers_str.parse::<usize>() {
-                    return w.clamp(4, 64);
+                    return w.clamp(1, 64);
                 }
             }
-            if total_cpus >= 32 {
-                32
-            } else if total_cpus >= 16 {
-                16
-            } else {
-                8
-            }
+            16
         }
     }
 }
@@ -423,13 +425,20 @@ async fn run_hunt_loop(
     let effective_window_bits = if target_pub_bytes.is_some() {
         // Kangaroo Mode (Public Key Tersedia, e.g. Puzzle #140):
         // Menggunakan window 2^30 = 1.073.741.824 keys per worker.
-        // Karena kompleksitas Kangaroo adalah O(√N), window 2^30 hanya memerlukan ~32.768 langkah EC
-        // yang selesai dalam hitungan milidetik (~5ms per worker)!
-        // 32 worker serentak = 34.35 Miliar keys/ronde (~0.18s) -> Throughput 150 - 200+ B k/s!
         30u32.min(total_range_bits.saturating_sub(1).max(8))
+    } else if device_mode == DeviceMode::Gpu {
+        // Address Scanner Mode di GPU (cuBitCrack):
+        // Di GPU, cuBitCrack mampu memeriksa miliaran kunci per detik.
+        // Default 34-bit = 17.18 Miliar keys/worker (~4-5s per round di 3.5 GK/s)
+        // Dapat dikonfigurasi via GPU_WINDOW_BITS di .env
+        let default_gpu_bits = std::env::var("GPU_WINDOW_BITS")
+            .ok()
+            .and_then(|v| v.trim().parse::<u32>().ok())
+            .unwrap_or(34);
+        default_gpu_bits.min(total_range_bits.saturating_sub(1).max(8))
     } else {
         // Address Scanner Mode (Hash160 only, e.g. Puzzle #71):
-        // Pengecekan sekuensial linear O(N). Dibatasi ke 18-bit (~262.144 keys/worker)
+        // Pengecekan sekuensial linear O(N) di CPU. Dibatasi ke 18-bit (~262.144 keys/worker)
         // agar setiap ronde tetap cepat (< 0.3s) dan UI bergerak lincah tanpa lagging.
         18u32.min(total_range_bits.saturating_sub(1).max(8))
     };
@@ -511,12 +520,18 @@ async fn run_hunt_loop(
         }
     }
 
-    // ADDRESS SCANNER GPU CONTINUOUS DISPATCH (cuBitCrack / BitCrack)
-    // Jika puzzle TIDAK memiliki public key (hanya Address/Hash160 seperti Puzzle #71),
-    // jalankan cuBitCrack langsung pada GPU agar RTX PRO 6000 membakar 100% CUDA cores di 3+ GigaKeys/s!
-    if device_mode == DeviceMode::Gpu && target_pub_bytes.is_none() {
+    // ADDRESS SCANNER GPU DISPATCH (cuBitCrack / BitCrack)
+    // Jika puzzle TIDAK memiliki public key (hanya Address/Hash160 seperti Puzzle #71):
+    // - Jika SEARCH_STRATEGY == "linear": jalankan cuBitCrack linear sweep
+    // - Jika SEARCH_STRATEGY == "stratified" / "random" (default): masuk ke multi-worker loop di bawah
+    //   sehingga worker terbagi merata di seluruh keyspace dan seluruh riwayat jump tersimpan ke PostgreSQL!
+    let search_strategy = std::env::var("SEARCH_STRATEGY")
+        .unwrap_or_else(|_| "stratified".to_string())
+        .to_lowercase();
+
+    if device_mode == DeviceMode::Gpu && target_pub_bytes.is_none() && search_strategy == "linear" {
         if let Some(bin) = crate::kangaroo::cuda::find_cuda_address_solver() {
-            tracing::info!("⚡ [GPU BITCRACK] Mode Continuous GPU Address Scanner ({bin}) aktif untuk Puzzle #{puzzle_num} (Address: {}).", puzzle.address);
+            tracing::info!("⚡ [GPU BITCRACK LINEAR] Mode Linear GPU Address Scanner ({bin}) aktif untuk Puzzle #{puzzle_num} (Address: {}).", puzzle.address);
             run_continuous_gpu_bitcrack(
                 pool,
                 puzzle,
@@ -529,21 +544,6 @@ async fn run_hunt_loop(
                 ws_tx,
             )
             .await;
-            return;
-        } else {
-            tracing::error!("❌ [GPU BITCRACK] cuBitCrack binary belum terpasang di bin/cuBitCrack! Puzzle #{puzzle_num} membutuhkan cuBitCrack agar berjalan di GPU.");
-            update_status(
-                &states,
-                puzzle_num,
-                HunterStatus::Error("cuBitCrack belum terpasang di bin/cuBitCrack. Silakan jalankan 'bash build_cubitcrack.sh' di server!".to_string()),
-            );
-            let mut s = states.lock().unwrap();
-            if let Some(st) = s.get_mut(&puzzle_num) {
-                st.last_window_hex = "⚠️ cuBitCrack belum terpasang! Jalankan 'bash build_cubitcrack.sh' di terminal server.".to_string();
-                if let Ok(msg) = serde_json::to_string(&*st) {
-                    let _ = ws_tx.send(msg);
-                }
-            }
             return;
         }
     }
@@ -674,21 +674,39 @@ async fn run_hunt_loop(
         }
 
         // Jalankan seluruh worker secara paralel di background thread pool
-        let tasks = batch_windows.into_iter().map(|(win_id, ws, we)| {
+        let tasks = batch_windows.into_iter().enumerate().map(|(w_idx, (win_id, ws, we))| {
             let stop_inner = stop_flag.clone();
             let target_pub = target_pub_bytes;
             let target_h160 = target_hash160;
             let ws_clone = ws.clone();
             let we_clone = we.clone();
             let mode = device_mode;
+            let p_addr = puzzle.address.clone();
 
             tokio::task::spawn_blocking(move || {
                 if mode == DeviceMode::Gpu {
+                    // 1. Mode Address Scanner di GPU (cuBitCrack multi-GPU / multi-worker)
+                    if target_pub.is_none() {
+                        if let Some(bin) = crate::kangaroo::cuda::find_cuda_address_solver() {
+                            let gpu_count = crate::kangaroo::cuda::get_gpu_count();
+                            let assigned_gpu = w_idx % gpu_count;
+                            let sm_blocks = crate::kangaroo::cuda::get_optimal_bitcrack_blocks(assigned_gpu);
+                            let res = crate::kangaroo::cuda::run_cuda_bitcrack_window(
+                                &bin,
+                                &p_addr,
+                                &ws_clone,
+                                &we_clone,
+                                assigned_gpu,
+                                sm_blocks,
+                                stop_inner.clone(),
+                            );
+                            return (win_id, ws_clone, we_clone, res);
+                        }
+                    }
+
+                    // 2. Mode Solver CUDA eksternal lainnya jika terpasang (misal keyhunt)
                     if let Some(bin) = crate::kangaroo::cuda::find_cuda_solver_binary() {
                         let lower_bin = bin.to_lowercase();
-                        // Jangan jalankan JeanLucPons kangaroo binary per-window berulang di 32 worker
-                        // karena setiap invokasi mengalokasikan 21GB RAM dan overhead startup GPU 42 detik.
-                        // Hanya panggil solver eksternal jika merupakan bitcrack atau keyhunt.
                         if !lower_bin.contains("kangaroo") {
                             if let Some(res) = crate::kangaroo::cuda::run_cuda_solver(
                                 &bin,
@@ -868,16 +886,41 @@ async fn run_continuous_gpu_kangaroo(
 
     // JeanLucPons Kangaroo memiliki limitasi matematis: interval maksimal 125-bit (2^125).
     // Untuk puzzle > 125-bit (seperti Puzzle #140 yang memiliki rentang 139-bit),
-    // batasi jendela aktif GPU ke 124-bit (1 << 124) agar tidak terjadi integer overflow di register CUDA.
+    // pilih interval 124-bit (1 << 124) secara Random Jump / Stratified yang belum ada di PostgreSQL!
     let max_gpu_interval = BigUint::one() << 124usize;
-    let bounded_end = if &full_end - &full_start > max_gpu_interval {
-        &full_start + max_gpu_interval
+    let (cur_start, cur_end) = if &full_end - &full_start > max_gpu_interval {
+        let scanned_intervals = db::load_scanned_windows(&pool, puzzle_num).await.unwrap_or_default();
+        let total_intervals = ((&full_end - &full_start) / &max_gpu_interval).max(BigUint::one());
+        let mut rng = rand::thread_rng();
+        let mut chosen_start = full_start.clone();
+        let mut chosen_end = &full_start + &max_gpu_interval;
+        let mut found_virgin = false;
+        for _ in 0..500 {
+            let rand_offset: BigUint = rng.gen_biguint_range(&BigUint::zero(), &total_intervals);
+            let cs = &full_start + (&rand_offset * &max_gpu_interval);
+            let ce = (&cs + &max_gpu_interval).min(full_end.clone());
+            if !is_range_scanned(&cs, &ce, &scanned_intervals) {
+                chosen_start = cs;
+                chosen_end = ce;
+                found_virgin = true;
+                break;
+            }
+        }
+        if !found_virgin {
+            chosen_start = full_start.clone();
+            chosen_end = (&full_start + &max_gpu_interval).min(full_end.clone());
+        }
+        tracing::info!(
+            "🦘 [GPU KANGAROO JUMP] Puzzle #{puzzle_num}: Memilih interval 2^124 acak 0x{:x}..0x{:x} (Anti-Duplikasi PostgreSQL)",
+            chosen_start, chosen_end
+        );
+        (chosen_start, chosen_end)
     } else {
-        full_end.clone()
+        (full_start.clone(), full_end.clone())
     };
 
-    let start_hex = format!("{:x}", full_start);
-    let end_hex = format!("{:x}", bounded_end);
+    let start_hex = format!("{:x}", cur_start);
+    let end_hex = format!("{:x}", cur_end);
     let cfg_content = format!("{start_hex}\n{end_hex}\n{pub_clean}\n");
     if let Err(e) = std::fs::write(&cfg_path, &cfg_content) {
         tracing::error!("Gagal menulis berkas konfigurasi Kangaroo: {e}");
@@ -887,8 +930,7 @@ async fn run_continuous_gpu_kangaroo(
     let bin = crate::kangaroo::cuda::find_cuda_solver_binary()
         .unwrap_or_else(|| "kangaroo".to_string());
 
-    let gpu_count = crate::kangaroo::cuda::get_gpu_count();
-    let gpu_id_str = if gpu_count > 1 { "0,1".to_string() } else { "0".to_string() };
+    let gpu_id_str = crate::kangaroo::cuda::get_gpu_ids_str();
 
     let mut args = vec![
         "-t".to_string(), "0".to_string(),
@@ -918,10 +960,10 @@ async fn run_continuous_gpu_kangaroo(
 
     // Inisialisasi 16 SM Grid Streams untuk visualisasi dashboard
     let num_workers = 16usize;
-    let window_step = (&bounded_end - &full_start) / BigUint::from(num_workers as u64);
+    let window_step = (&cur_end - &cur_start) / BigUint::from(num_workers as u64);
     let active_win_list: Vec<WorkerWindow> = (0..num_workers)
         .map(|idx| {
-            let ws = &full_start + (&window_step * BigUint::from(idx as u64));
+            let ws = &cur_start + (&window_step * BigUint::from(idx as u64));
             let we = &ws + &window_step;
             WorkerWindow {
                 worker_id: idx + 1,
@@ -935,7 +977,7 @@ async fn run_continuous_gpu_kangaroo(
     {
         let mut s = states.lock().unwrap();
         if let Some(st) = s.get_mut(&puzzle_num) {
-            st.last_window_hex = format!("0x{:x}..0x{:x} (⚡ 16 CUDA Streams • Inisialisasi Kangaroo)", full_start, bounded_end);
+            st.last_window_hex = format!("0x{:x}..0x{:x} (⚡ 16 CUDA Streams • Inisialisasi Kangaroo)", cur_start, cur_end);
             st.active_workers = num_workers;
             st.active_windows = active_win_list.clone();
             st.is_kangaroo_mode = true;
@@ -991,6 +1033,27 @@ async fn run_continuous_gpu_kangaroo(
                 if pause_flag.load(Ordering::Relaxed) || stop_flag.load(Ordering::Relaxed) {
                     tracing::info!("⏸️ [KANGAROO PAUSE] Menjeda hunter Kangaroo puzzle #{puzzle_num}...");
                     let _ = child.kill().await;
+
+                    // Simpan interval yang telah discan ke PostgreSQL
+                    let s_hex = format!("0x{:x}", cur_start);
+                    let e_hex = format!("0x{:x}", cur_end);
+                    let pool_clone = pool.clone();
+                    let p_num = puzzle_num;
+                    let win_id = round_counter as i64;
+                    tokio::spawn(async move {
+                        let _ = sqlx::query(
+                            "INSERT INTO scanned_windows (puzzle_number, window_id, range_start_hex, range_end_hex, keys_checked, duration_secs) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING"
+                        )
+                        .bind(p_num)
+                        .bind(win_id)
+                        .bind(&s_hex)
+                        .bind(&e_hex)
+                        .bind(win_id * 5_000_000)
+                        .bind(10.0f64)
+                        .execute(&pool_clone)
+                        .await;
+                    });
+
                     update_status(&states, puzzle_num, HunterStatus::Paused);
                     if let Some(st) = states.lock().unwrap().get(&puzzle_num) {
                         if let Ok(msg) = serde_json::to_string(st) {
@@ -1028,19 +1091,43 @@ async fn run_continuous_gpu_kangaroo(
                                     st.total_keys_checked = count;
                                 }
                                 st.round = round_counter;
-                                st.last_window_hex = format!("0x{:x}..0x{:x} (⚡ NVIDIA CUDA Kangaroo O(√N))", full_start, bounded_end);
+                                st.windows_scanned = round_counter;
+                                st.last_window_hex = format!("0x{:x}..0x{:x} (⚡ NVIDIA CUDA Kangaroo O(√N))", cur_start, cur_end);
                                 st.active_workers = num_workers;
                                 st.active_windows = active_win_list.clone();
                                 if let Ok(msg) = serde_json::to_string(&*st) {
                                     let _ = ws_tx.send(msg);
                                 }
                             }
+
+                            // Simpan checkpoint progres ke PostgreSQL setiap 10 update (~5 detik)
+                            if round_counter % 10 == 0 {
+                                let pool_clone = pool.clone();
+                                let p_num = puzzle_num;
+                                let win_id = round_counter as i64;
+                                let checked = parsed_count.unwrap_or(0) as i64;
+                                let s_hex = format!("0x{:x}", cur_start);
+                                let e_hex = format!("0x{:x}", cur_end);
+                                tokio::spawn(async move {
+                                    let _ = sqlx::query(
+                                        "INSERT INTO scanned_windows (puzzle_number, window_id, range_start_hex, range_end_hex, keys_checked, duration_secs) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING"
+                                    )
+                                    .bind(p_num)
+                                    .bind(win_id)
+                                    .bind(&s_hex)
+                                    .bind(&e_hex)
+                                    .bind(checked)
+                                    .bind(5.0f64)
+                                    .execute(&pool_clone)
+                                    .await;
+                                });
+                            }
                         } else if !l.trim().is_empty() {
                             let msg_line = l.trim().to_string();
                             tracing::info!("🦘 [KANGAROO GPU #{puzzle_num}] {msg_line}");
                             let mut s = states.lock().unwrap();
                             if let Some(st) = s.get_mut(&puzzle_num) {
-                                st.last_window_hex = format!("0x{:x}..0x{:x} (⚡ {})", full_start, bounded_end, msg_line);
+                                st.last_window_hex = format!("0x{:x}..0x{:x} (⚡ {})", cur_start, cur_end, msg_line);
                                 st.active_workers = num_workers;
                                 st.active_windows = active_win_list.clone();
                                 if let Ok(msg) = serde_json::to_string(&*st) {
@@ -1132,11 +1219,11 @@ async fn run_continuous_gpu_bitcrack(
 
     // Inisialisasi 16 SM Grid Streams untuk visualisasi dashboard multi-worker
     let num_workers = 16usize;
-    let window_step = (&full_end - &full_start) / BigUint::from(num_workers as u64);
+    let stream_chunk = BigUint::from(12_320_768u64 / num_workers as u64);
     let active_win_list: Vec<WorkerWindow> = (0..num_workers)
         .map(|idx| {
-            let ws = &full_start + (&window_step * BigUint::from(idx as u64));
-            let we = &ws + &window_step;
+            let ws = &full_start + (&stream_chunk * BigUint::from(idx as u64));
+            let we = &ws + &stream_chunk;
             WorkerWindow {
                 worker_id: idx + 1,
                 start_hex: format!("0x{:x}", ws),
@@ -1145,9 +1232,11 @@ async fn run_continuous_gpu_bitcrack(
         })
         .collect();
 
+    let gpu_id_str = crate::kangaroo::cuda::get_gpu_ids_str();
+    let sm_blocks = crate::kangaroo::cuda::get_optimal_bitcrack_blocks(0);
     let args = vec![
-        "-d".to_string(), "0".to_string(),
-        "-b".to_string(), "188".to_string(),
+        "-d".to_string(), gpu_id_str,
+        "-b".to_string(), sm_blocks.to_string(),
         "-t".to_string(), "256".to_string(),
         "-p".to_string(), "256".to_string(),
         "-c".to_string(), // Compressed Bitcoin address
@@ -1162,7 +1251,8 @@ async fn run_continuous_gpu_bitcrack(
     {
         let mut s = states.lock().unwrap();
         if let Some(st) = s.get_mut(&puzzle_num) {
-            st.last_window_hex = format!("0x{:x}..0x{:x} (⚡ 16 CUDA Streams • cuBitCrack Address Scanner)", full_start, full_end);
+            let init_end = &full_start + BigUint::from(12_320_768u64);
+            st.last_window_hex = format!("0x{:x}..0x{:x} (⚡ 16 CUDA Streams • cuBitCrack)", full_start, init_end);
             st.active_workers = num_workers;
             st.active_windows = active_win_list.clone();
             st.is_kangaroo_mode = false;
@@ -1219,6 +1309,24 @@ async fn run_continuous_gpu_bitcrack(
                 if pause_flag.load(Ordering::Relaxed) || stop_flag.load(Ordering::Relaxed) {
                     tracing::info!("⏸️ [BITCRACK PAUSE] Menjeda hunter GPU BitCrack puzzle #{puzzle_num}...");
                     let _ = child.kill().await;
+                    let cur_checked = states.lock().unwrap().get(&puzzle_num).map(|s| s.total_keys_checked).unwrap_or(0);
+                    let s_hex = format!("0x{:x}", full_start);
+                    let cur_pos = &full_start + BigUint::from(cur_checked);
+                    let e_hex = format!("0x{:x}", cur_pos);
+                    let pool_clone = pool.clone();
+                    tokio::spawn(async move {
+                        let _ = sqlx::query(
+                            "INSERT INTO scanned_windows (puzzle_number, window_id, range_start_hex, range_end_hex, keys_checked, duration_secs) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING"
+                        )
+                        .bind(puzzle_num)
+                        .bind(round_counter as i64)
+                        .bind(&s_hex)
+                        .bind(&e_hex)
+                        .bind(cur_checked as i64)
+                        .bind(10.0f64)
+                        .execute(&pool_clone)
+                        .await;
+                    });
                     update_status(&states, puzzle_num, HunterStatus::Paused);
                     if let Some(st) = states.lock().unwrap().get(&puzzle_num) {
                         if let Ok(msg) = serde_json::to_string(st) {
@@ -1257,21 +1365,74 @@ async fn run_continuous_gpu_bitcrack(
                                 let parsed_kps = parse_bitcrack_speed(&line);
                                 let parsed_count = parse_bitcrack_count(&line);
 
-                                let mut s = states.lock().unwrap();
-                                if let Some(st) = s.get_mut(&puzzle_num) {
-                                    if let Some(kps) = parsed_kps {
-                                        st.keys_per_second = kps;
+                                let mut cur_pos_clone = full_start.clone();
+                                let mut cur_end_clone = full_start.clone();
+                                let mut total_checked_val = 0u64;
+
+                                {
+                                    let mut s = states.lock().unwrap();
+                                    if let Some(st) = s.get_mut(&puzzle_num) {
+                                        if let Some(kps) = parsed_kps {
+                                            st.keys_per_second = kps;
+                                        }
+                                        if let Some(count) = parsed_count {
+                                            st.total_keys_checked = count;
+                                        } else if let Some(kps) = parsed_kps {
+                                            st.total_keys_checked += (kps * 0.5) as u64;
+                                        }
+                                        total_checked_val = st.total_keys_checked;
+                                        st.round = round_counter;
+                                        st.windows_scanned = round_counter;
+
+                                        let cur_pos = &full_start + BigUint::from(st.total_keys_checked);
+                                        let cur_end = &cur_pos + BigUint::from(12_320_768u64);
+                                        cur_pos_clone = cur_pos.clone();
+                                        cur_end_clone = cur_end.clone();
+
+                                        st.last_window_hex = format!("0x{:x}..0x{:x} (⚡ NVIDIA CUDA cuBitCrack)", cur_pos, cur_end);
+                                        st.active_workers = num_workers;
+
+                                        // Majukan jendela 16 CUDA Streams secara dinamis sesuai pergerakan scan GPU real-time
+                                        let dynamic_win_list: Vec<WorkerWindow> = (0..num_workers)
+                                            .map(|idx| {
+                                                let ws = &cur_pos + (&stream_chunk * BigUint::from(idx as u64));
+                                                let we = &ws + &stream_chunk;
+                                                WorkerWindow {
+                                                    worker_id: idx + 1,
+                                                    start_hex: format!("0x{:x}", ws),
+                                                    end_hex: format!("0x{:x}", we),
+                                                }
+                                            })
+                                            .collect();
+                                        st.active_windows = dynamic_win_list;
+
+                                        if let Ok(msg) = serde_json::to_string(&*st) {
+                                            let _ = ws_tx.send(msg);
+                                        }
                                     }
-                                    if let Some(count) = parsed_count {
-                                        st.total_keys_checked = count;
-                                    }
-                                    st.round = round_counter;
-                                    st.last_window_hex = format!("0x{:x}..0x{:x} (⚡ NVIDIA CUDA cuBitCrack)", full_start, full_end);
-                                    st.active_workers = num_workers;
-                                    st.active_windows = active_win_list.clone();
-                                    if let Ok(msg) = serde_json::to_string(&*st) {
-                                        let _ = ws_tx.send(msg);
-                                    }
+                                }
+
+                                // Simpan checkpoint berkala ke PostgreSQL setiap 10 ronde (~10 detik)
+                                if round_counter % 10 == 0 && total_checked_val > 0 {
+                                    let pool_clone = pool.clone();
+                                    let p_num = puzzle_num;
+                                    let win_id = round_counter as i64;
+                                    let checked = total_checked_val as i64;
+                                    let s_hex = format!("0x{:x}", cur_pos_clone);
+                                    let e_hex = format!("0x{:x}", cur_end_clone);
+                                    tokio::spawn(async move {
+                                        let _ = sqlx::query(
+                                            "INSERT INTO scanned_windows (puzzle_number, window_id, range_start_hex, range_end_hex, keys_checked, duration_secs) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING"
+                                        )
+                                        .bind(p_num)
+                                        .bind(win_id)
+                                        .bind(&s_hex)
+                                        .bind(&e_hex)
+                                        .bind(checked)
+                                        .bind(10.0f64)
+                                        .execute(&pool_clone)
+                                        .await;
+                                    });
                                 }
                             } else {
                                 tracing::info!("⚡ [BITCRACK GPU #{puzzle_num}] {line}");
@@ -1393,8 +1554,8 @@ fn parse_bitcrack_count(line: &str) -> Option<u64> {
     for (i, w) in words.iter().enumerate() {
         if w.starts_with("total") || w.contains("total") {
             if i > 0 {
-                let count_str = words[i - 1].trim_matches(|c: char| !c.is_ascii_digit());
-                if let Ok(c) = count_str.parse::<u64>() {
+                let digits: String = words[i - 1].chars().filter(|c| c.is_ascii_digit()).collect();
+                if let Ok(c) = digits.parse::<u64>() {
                     return Some(c);
                 }
             }
@@ -1404,8 +1565,8 @@ fn parse_bitcrack_count(line: &str) -> Option<u64> {
     if let Some(idx) = lower.find("total:") {
         let sub = &line[idx + 6..];
         let end = sub.find(']').unwrap_or_else(|| sub.find(' ').unwrap_or(sub.len()));
-        let chunk = sub[..end].trim().replace(',', "");
-        return chunk.parse::<u64>().ok();
+        let digits: String = sub[..end].chars().filter(|c| c.is_ascii_digit()).collect();
+        return digits.parse::<u64>().ok();
     }
     None
 }

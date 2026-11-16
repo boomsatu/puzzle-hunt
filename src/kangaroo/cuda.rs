@@ -5,9 +5,10 @@
 //! serta single-dispatch GPU pipeline (1 worker = all CUDA cores).
 
 use std::process::Command;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use num_bigint::BigUint;
+use num_traits::ToPrimitive;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 use crate::kangaroo::KangarooResult;
@@ -107,10 +108,44 @@ pub fn detect_cuda_gpu() -> Option<CudaGpuInfo> {
 }
 
 /// Mengembalikan jumlah GPU NVIDIA yang terpasang di sistem
-#[allow(dead_code)]
 pub fn get_gpu_count() -> usize {
+    if let Ok(devs) = std::env::var("GPU_DEVICES").or_else(|_| std::env::var("CUDA_VISIBLE_DEVICES")) {
+        let parts: Vec<&str> = devs.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+        if !parts.is_empty() {
+            return parts.len();
+        }
+    }
     let count = detect_all_cuda_gpus().len();
     if count == 0 { 1 } else { count }
+}
+
+/// Mengembalikan daftar ID GPU dalam format string yang dipisahkan koma (misal: "0" atau "0,1" atau "0,1,2,3")
+pub fn get_gpu_ids_str() -> String {
+    if let Ok(devs) = std::env::var("GPU_DEVICES").or_else(|_| std::env::var("CUDA_VISIBLE_DEVICES")) {
+        let clean = devs.trim();
+        if !clean.is_empty() {
+            return clean.to_string();
+        }
+    }
+    let count = get_gpu_count();
+    (0..count).map(|i| i.to_string()).collect::<Vec<_>>().join(",")
+}
+
+/// Menghitung jumlah block optimal untuk cuBitCrack berdasarkan SM GPU yang terdeteksi
+pub fn get_optimal_bitcrack_blocks(gpu_id: usize) -> u32 {
+    if let Ok(b_str) = std::env::var("BITCRACK_BLOCKS") {
+        if let Ok(b) = b_str.trim().parse::<u32>() {
+            return b.clamp(16, 512);
+        }
+    }
+    let all = detect_all_cuda_gpus();
+    if !all.is_empty() {
+        let idx = gpu_id % all.len();
+        let (_, sm) = get_gpu_specs(&all[idx].name);
+        sm
+    } else {
+        188 // Default untuk target hosting NVIDIA RTX PRO 6000 Blackwell
+    }
 }
 
 /// Mengambil telemetri lengkap GPU untuk kebutuhan visualisasi UI dan koordinasi backend
@@ -301,6 +336,129 @@ pub fn run_cuda_solver(
     }
 
     result
+}
+
+/// Mengekstrak private key 64-karakter hex dari output solver text
+pub fn extract_key_from_text(text: &str) -> Option<String> {
+    let lower = text.to_lowercase();
+    for marker in &["private key:", "priv (hex):", "privkey:", "priv:", "found:"] {
+        if let Some(idx) = lower.find(marker) {
+            let after = &text[idx + marker.len()..];
+            for word in after.split_whitespace() {
+                let clean = word.trim().trim_start_matches("0x").trim_matches(|c| c == '[' || c == ']');
+                if clean.len() == 64 && clean.chars().all(|c| c.is_ascii_hexdigit()) {
+                    return Some(clean.to_lowercase());
+                }
+            }
+        }
+    }
+
+    for word in text.split_whitespace() {
+        let clean = word.trim().trim_start_matches("0x").trim_matches(|c| c == '[' || c == ']');
+        if clean.len() == 64 && clean.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Some(clean.to_lowercase());
+        }
+    }
+    None
+}
+
+/// Menjalankan satu window pencarian cuBitCrack pada GPU tertentu dengan parameter dinamis
+pub fn run_cuda_bitcrack_window(
+    solver_bin: &str,
+    target_address: &str,
+    w_start: &BigUint,
+    w_end: &BigUint,
+    gpu_id: usize,
+    sm_blocks: u32,
+    stop_flag: Arc<AtomicBool>,
+) -> KangarooResult {
+    let t_start = std::time::Instant::now();
+    let s_hex = format!("{:x}", w_start);
+    let e_hex = format!("{:x}", w_end);
+    let range_arg = format!("{}:{}", s_hex, e_hex);
+
+    let keys_covered = if w_end >= w_start {
+        (&(w_end - w_start) + BigUint::from(1u64))
+            .to_u64()
+            .unwrap_or(1u64 << 34)
+    } else {
+        0
+    };
+
+    let unique_id = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let out_file = format!("data/found_bitcrack_{}_{}.txt", std::process::id(), unique_id);
+
+    let mut cmd = Command::new(solver_bin);
+    cmd.args([
+        "-d", &gpu_id.to_string(),
+        "-b", &sm_blocks.to_string(),
+        "-t", "256",
+        "-p", "256",
+        "-c",
+        "--keyspace", &range_arg,
+        "-o", &out_file,
+        target_address,
+    ]);
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("Gagal menjalankan cuBitCrack: {e}");
+            return KangarooResult::miss(0, 0.0);
+        }
+    };
+
+    let mut found_key = None;
+    loop {
+        if stop_flag.load(Ordering::Relaxed) {
+            let _ = child.kill();
+            break;
+        }
+
+        match child.try_wait() {
+            Ok(Some(_status)) => {
+                break;
+            }
+            Ok(None) => {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(_) => break,
+        }
+    }
+
+    // Periksa file output jika ada hasil
+    if let Ok(content) = std::fs::read_to_string(&out_file) {
+        if let Some(key_hex) = extract_key_from_text(&content) {
+            if let Some(cand) = BigUint::parse_bytes(key_hex.as_bytes(), 16) {
+                found_key = Some(cand);
+            }
+        }
+        let _ = std::fs::remove_file(&out_file);
+    }
+
+    // Periksa juga stdout jika output file belum terbuat
+    if found_key.is_none() {
+        if let Ok(output) = child.wait_with_output() {
+            let stdout_str = String::from_utf8_lossy(&output.stdout);
+            if let Some(key_hex) = extract_key_from_text(&stdout_str) {
+                if let Some(cand) = BigUint::parse_bytes(key_hex.as_bytes(), 16) {
+                    found_key = Some(cand);
+                }
+            }
+        }
+    }
+
+    let elapsed = t_start.elapsed().as_secs_f64();
+    if let Some(key) = found_key {
+        KangarooResult::hit(key, keys_covered, elapsed)
+    } else {
+        KangarooResult::miss(keys_covered, elapsed)
+    }
 }
 
 /// Inisialisasi dan verifikasi status CUDA saat aplikasi startup

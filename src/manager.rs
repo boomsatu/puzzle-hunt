@@ -428,13 +428,15 @@ async fn run_hunt_loop(
         30u32.min(total_range_bits.saturating_sub(1).max(8))
     } else if device_mode == DeviceMode::Gpu {
         // Address Scanner Mode di GPU (cuBitCrack):
-        // Di GPU, cuBitCrack mampu memeriksa miliaran kunci per detik.
-        // Default 34-bit = 17.18 Miliar keys/worker (~4-5s per round di 3.5 GK/s)
-        // Dapat dikonfigurasi via GPU_WINDOW_BITS di .env
+        // Di GPU, cuBitCrack memeriksa miliaran kunci per detik.
+        // Default diatur ke 28-bit (~268.4 Juta keys/worker, total 16 worker = ~4.29 Miliar keys/ronde).
+        // Di Dual RTX 5090 (6-7 GK/s), setiap ronde selesai dalam ~0.6 - 0.8 detik!
+        // Setiap ronde langsung tersimpan ke PostgreSQL, counter bertambah cepat, dan visual UI sangat responsif!
+        // Dapat dikonfigurasi via GPU_WINDOW_BITS di .env (misal 26 = 67M, 27 = 134M, 28 = 268M)
         let default_gpu_bits = std::env::var("GPU_WINDOW_BITS")
             .ok()
             .and_then(|v| v.trim().parse::<u32>().ok())
-            .unwrap_or(34);
+            .unwrap_or(28);
         default_gpu_bits.min(total_range_bits.saturating_sub(1).max(8))
     } else {
         // Address Scanner Mode (Hash160 only, e.g. Puzzle #71):

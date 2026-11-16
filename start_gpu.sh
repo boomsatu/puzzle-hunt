@@ -58,7 +58,24 @@ echo "   WebSocket    : ws://$PUBLIC_IP:$PORT/api/ws"
 echo "   Frontend     : Hosted on Vercel"
 echo -e "${NC}"
 echo -e "${YELLOW}💡 Tip: Sambungkan Vercel dengan menyetel VITE_API_URL=http://$PUBLIC_IP:$PORT${NC}"
-echo -e "${YELLOW}📝 Log output real-time (Ctrl+C untuk pause/stop):${NC}"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-RUST_LOG=info ./target/release/puzzle-hunt
+if [ "$1" == "--daemon" ] || [ "$1" == "-d" ]; then
+    mkdir -p logs
+    pkill -f puzzle-hunt 2>/dev/null || true
+    sleep 1
+    nohup ./target/release/puzzle-hunt > logs/backend.log 2>&1 &
+    PID=$!
+    echo "$PID" > .backend.pid
+    echo -e "${GREEN}✅ Backend berjalan aman di BACKGROUND (PID: $PID).${NC}"
+    echo -e "${GREEN}🔒 Anda AMAN untuk menutup terminal SSH atau mematikan laptop sekarang!${NC}"
+    echo -e "${CYAN}   - Pantau log live : tail -f logs/backend.log${NC}"
+    echo -e "${CYAN}   - Hentikan        : bash stop.sh (atau kill $PID)${NC}"
+else
+    echo -e "${YELLOW}⚠️  PERHATIAN: Saat ini berjalan di FOREGROUND (jika terminal SSH ditutup, backend akan BERHENTI).${NC}"
+    echo -e "${YELLOW}   Agar aman menutup terminal & jalan 24 jam nonstop di background, gunakan:${NC}"
+    echo -e "   👉 ${GREEN}bash start_gpu.sh --daemon${NC}  (atau gunakan ${GREEN}tmux${NC})"
+    echo -e "${YELLOW}📝 Log output real-time (Ctrl+C untuk pause/stop):${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    RUST_LOG=info ./target/release/puzzle-hunt
+fi

@@ -107,6 +107,7 @@ pub fn detect_cuda_gpu() -> Option<CudaGpuInfo> {
 }
 
 /// Mengembalikan jumlah GPU NVIDIA yang terpasang di sistem
+#[allow(dead_code)]
 pub fn get_gpu_count() -> usize {
     let count = detect_all_cuda_gpus().len();
     if count == 0 { 1 } else { count }

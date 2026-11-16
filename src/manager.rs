@@ -461,55 +461,6 @@ async fn run_hunt_loop(
         return;
     }
 
-    // KANGAROO GPU CONTINUOUS MODE DISPATCH
-    // Jika puzzle memiliki public key dan mode GPU aktif, jalankan 1 continuous process Kangaroo Dual-GPU
-    // (Memeras 100% 2x RTX 5090 di 5.14 GigaKeys/s murni CUDA, dan streaming live ke web dashboard!)
-    if device_mode == DeviceMode::Gpu && target_pub_bytes.is_some() {
-        if let Some(bin) = crate::kangaroo::cuda::find_cuda_solver_binary() {
-            if bin.to_lowercase().contains("kangaroo") {
-                tracing::info!("🦘 [GPU KANGAROO] Mode Continuous Dual-GPU aktif untuk Puzzle #{puzzle_num} (Pubkey Terbuka).");
-                run_continuous_gpu_kangaroo(
-                    pool,
-                    puzzle,
-                    full_start,
-                    full_end,
-                    pub_clean.to_string(),
-                    destination_address,
-                    states,
-                    pause_flag,
-                    stop_flag,
-                    ws_tx,
-                )
-                .await;
-                return;
-            }
-        }
-    }
-
-    // ADDRESS SCANNER GPU CONTINUOUS DISPATCH (cuBitCrack / BitCrack)
-    // Jika puzzle TIDAK memiliki public key (hanya Address/Hash160 seperti Puzzle #71),
-    // jalankan cuBitCrack langsung pada GPU agar RTX 6000 membakar 100% CUDA cores di 3+ GigaKeys/s!
-    if device_mode == DeviceMode::Gpu && target_pub_bytes.is_none() {
-        if let Some(bin) = crate::kangaroo::cuda::find_cuda_address_solver() {
-            tracing::info!("⚡ [GPU BITCRACK] Mode Continuous GPU Address Scanner ({bin}) aktif untuk Puzzle #{puzzle_num} (Address: {}).", puzzle.address);
-            run_continuous_gpu_bitcrack(
-                pool,
-                puzzle,
-                full_start,
-                full_end,
-                destination_address,
-                states,
-                pause_flag,
-                stop_flag,
-                ws_tx,
-            )
-            .await;
-            return;
-        } else {
-            tracing::warn!("ℹ️ [GPU INFO] cuBitCrack / bitcrack belum terpasang di bin/. Puzzle #{puzzle_num} berjalan di CPU. Pasang cuBitCrack agar puzzle address juga berjalan di GPU!");
-        }
-    }
-
     let mut round: u64 = 0;
     let mut total_keys: u64 = 0;
     let mut last_check = Instant::now();
@@ -808,6 +759,7 @@ async fn run_hunt_loop(
 /// Menjalankan JeanLucPons Kangaroo sebagai continuous process pada GPU (Dual-GPU RTX 5090)
 /// untuk puzzle yang sudah memiliki Public Key (seperti Puzzle #140).
 /// Hanya 1 instance yang berjalan (menghemat RAM, aman di 129GB, dan memeras 100% 2x RTX 5090).
+#[allow(dead_code)]
 async fn run_continuous_gpu_kangaroo(
     pool: PgPool,
     puzzle: Puzzle,
@@ -992,6 +944,7 @@ async fn run_continuous_gpu_kangaroo(
 }
 
 /// Menjalankan cuBitCrack / BitCrack sebagai continuous GPU process untuk puzzle yang TIDAK memiliki public key (Address Scanner)
+#[allow(dead_code)]
 async fn run_continuous_gpu_bitcrack(
     pool: PgPool,
     puzzle: Puzzle,
@@ -1140,6 +1093,7 @@ async fn run_continuous_gpu_bitcrack(
     }
 }
 
+#[allow(dead_code)]
 fn parse_bitcrack_speed(line: &str) -> Option<f64> {
     if let Some(idx) = line.find("Speed:") {
         let sub = &line[idx + 6..];
@@ -1161,6 +1115,7 @@ fn parse_bitcrack_speed(line: &str) -> Option<f64> {
     None
 }
 
+#[allow(dead_code)]
 fn parse_bitcrack_count(line: &str) -> Option<u64> {
     if let Some(idx) = line.find("Total:") {
         let sub = &line[idx + 6..];
@@ -1282,6 +1237,7 @@ async fn handle_key_found(
     tracing::info!("🎉🎉🎉 PUZZLE #{} SOLVED! KEY: 0x{}", puzzle_num, priv_hex);
 }
 
+#[allow(dead_code)]
 fn parse_kangaroo_speed(line: &str) -> Option<f64> {
     let start = line.find('[')?;
     let end = line[start..].find(']')? + start;
@@ -1304,6 +1260,7 @@ fn parse_kangaroo_speed(line: &str) -> Option<f64> {
     }
 }
 
+#[allow(dead_code)]
 fn parse_kangaroo_count(line: &str) -> Option<u64> {
     if let Some(idx) = line.find("[Count 2^") {
         let sub = &line[idx + 9..];
@@ -1315,6 +1272,7 @@ fn parse_kangaroo_count(line: &str) -> Option<u64> {
     }
 }
 
+#[allow(dead_code)]
 fn extract_key_from_text(text: &str) -> Option<String> {
     for word in text.split_whitespace() {
         let clean = word.trim().trim_start_matches("0x").trim_matches(|c| c == '[' || c == ']');

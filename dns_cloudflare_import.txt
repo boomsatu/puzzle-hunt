@@ -1,0 +1,30 @@
+; ==============================================================================
+; CLOUDFLARE DNS IMPORT ZONE FILE
+; Domain Utama : bariscode.my.id
+; Subdomain    : gpu-engine-one.bariscode.my.id
+;
+; CARA IMPORT KE CLOUDFLARE:
+; 1. Buka https://dash.cloudflare.com/
+; 2. Pilih domain 'bariscode.my.id'
+; 3. Masuk ke menu 'DNS' -> 'Records'
+; 4. Di bagian 'Advanced', klik 'Import and Export' -> 'Import'
+; 5. Upload file ini (dns_cloudflare_import.txt)
+; ==============================================================================
+
+$ORIGIN bariscode.my.id.
+$TTL 300
+
+; ------------------------------------------------------------------------------
+; OPSI 1: A Record (Jika menggunakan Direct Public IP Server)
+; Ganti 44.209.29.142 dengan IP publik server Anda jika berbeda.
+; Pastikan tanda Proxy (Awan Oranye) di Cloudflare diaktifkan (Proxied: ON)
+; agar mendapatkan SSL Gratis otomatis dari Cloudflare.
+; ------------------------------------------------------------------------------
+gpu-engine-one 300 IN A 44.209.29.142
+
+; ------------------------------------------------------------------------------
+; OPSI 2: CNAME Record (Jika menggunakan Cloudflare Tunnel / cloudflared)
+; Catatan: Jika menggunakan Cloudflare Tunnel, Cloudflare akan membuatkan
+; CNAME record ini secara otomatis saat perintah tunnel dijalankan.
+; ------------------------------------------------------------------------------
+; gpu-engine-one 300 IN CNAME <TUNNEL_ID>.cfargotunnel.com.

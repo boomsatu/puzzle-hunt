@@ -594,14 +594,17 @@ async fn run_hunt_loop(
             }
         }
 
-        // Jalankan seluruh worker secara paralel di background thread pool
-        let tasks = batch_windows.into_iter().map(|(win_id, ws, we)| {
+        let gpu_count = crate::kangaroo::cuda::get_gpu_count();
+
+        // Jalankan seluruh worker secara paralel di background thread pool (Multi-GPU round-robin)
+        let tasks = batch_windows.into_iter().enumerate().map(|(worker_idx, (win_id, ws, we))| {
             let stop_inner = stop_flag.clone();
             let target_pub = target_pub_bytes;
             let target_h160 = target_hash160;
             let ws_clone = ws.clone();
             let we_clone = we.clone();
             let mode = device_mode;
+            let assigned_gpu = if gpu_count > 0 { Some((worker_idx % gpu_count) as u32) } else { None };
 
             tokio::task::spawn_blocking(move || {
                 if mode == DeviceMode::Gpu {
@@ -613,6 +616,7 @@ async fn run_hunt_loop(
                             &ws_clone,
                             &we_clone,
                             dp_bits,
+                            assigned_gpu,
                             stop_inner.clone(),
                         ) {
                             return (win_id, ws_clone, we_clone, res);

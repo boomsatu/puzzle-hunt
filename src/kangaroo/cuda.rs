@@ -68,8 +68,8 @@ pub fn get_gpu_specs(name: &str) -> (u32, u32) {
     }
 }
 
-/// Mendeteksi apakah sistem memiliki NVIDIA GPU dan CUDA driver yang aktif via nvidia-smi
-pub fn detect_cuda_gpu() -> Option<CudaGpuInfo> {
+/// Mendeteksi semua NVIDIA GPU dan CUDA driver yang aktif via nvidia-smi
+pub fn detect_all_cuda_gpus() -> Vec<CudaGpuInfo> {
     let output = match Command::new("nvidia-smi")
         .args([
             "--query-gpu=name,memory.total,memory.used,driver_version",
@@ -78,41 +78,66 @@ pub fn detect_cuda_gpu() -> Option<CudaGpuInfo> {
         .output()
     {
         Ok(out) if out.status.success() => out,
-        _ => return None,
+        _ => return Vec::new(),
     };
 
     let text = String::from_utf8_lossy(&output.stdout);
-    let line = text.lines().next()?;
-    let parts: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
-
-    if parts.is_empty() {
-        return None;
+    let mut list = Vec::new();
+    for line in text.lines() {
+        let parts: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
+        if !parts.is_empty() && !parts[0].is_empty() {
+            let name = parts[0].to_string();
+            let total_memory_mb = parts.get(1).and_then(|m| m.parse::<u64>().ok()).unwrap_or(0);
+            let used_memory_mb = parts.get(2).and_then(|m| m.parse::<u64>().ok()).unwrap_or(0);
+            let driver_version = parts.get(3).map(|d| d.to_string()).unwrap_or_else(|| "Unknown".into());
+            list.push(CudaGpuInfo {
+                name,
+                total_memory_mb,
+                used_memory_mb,
+                driver_version,
+            });
+        }
     }
+    list
+}
 
-    let name = parts[0].to_string();
-    let total_memory_mb = parts.get(1).and_then(|m| m.parse::<u64>().ok()).unwrap_or(0);
-    let used_memory_mb = parts.get(2).and_then(|m| m.parse::<u64>().ok()).unwrap_or(0);
-    let driver_version = parts.get(3).map(|d| d.to_string()).unwrap_or_else(|| "Unknown".into());
+/// Mendeteksi apakah sistem memiliki NVIDIA GPU (mengembalikan GPU pertama)
+#[allow(dead_code)]
+pub fn detect_cuda_gpu() -> Option<CudaGpuInfo> {
+    detect_all_cuda_gpus().into_iter().next()
+}
 
-    Some(CudaGpuInfo {
-        name,
-        total_memory_mb,
-        used_memory_mb,
-        driver_version,
-    })
+/// Mengembalikan jumlah GPU NVIDIA yang terpasang di sistem
+pub fn get_gpu_count() -> usize {
+    let count = detect_all_cuda_gpus().len();
+    if count == 0 { 1 } else { count }
 }
 
 /// Mengambil telemetri lengkap GPU untuk kebutuhan visualisasi UI dan koordinasi backend
 pub fn get_telemetry(streams: usize) -> GpuTelemetry {
-    if let Some(gpu) = detect_cuda_gpu() {
-        let (cores, sm) = get_gpu_specs(&gpu.name);
+    let all_gpus = detect_all_cuda_gpus();
+    if !all_gpus.is_empty() {
+        let count = all_gpus.len();
+        let first = &all_gpus[0];
+        let (cores_per_gpu, sm_per_gpu) = get_gpu_specs(&first.name);
+        let total_cores = cores_per_gpu * (count as u32);
+        let total_sm = sm_per_gpu * (count as u32);
+        let total_memory_mb: u64 = all_gpus.iter().map(|g| g.total_memory_mb).sum();
+        let used_memory_mb: u64 = all_gpus.iter().map(|g| g.used_memory_mb).sum();
+
+        let display_name = if count > 1 {
+            format!("{}x {}", count, first.name)
+        } else {
+            first.name.clone()
+        };
+
         GpuTelemetry {
-            name: gpu.name,
-            total_memory_mb: gpu.total_memory_mb,
-            used_memory_mb: gpu.used_memory_mb,
-            driver_version: gpu.driver_version,
-            cuda_cores: cores,
-            sm_count: sm,
+            name: display_name,
+            total_memory_mb,
+            used_memory_mb,
+            driver_version: first.driver_version.clone(),
+            cuda_cores: total_cores,
+            sm_count: total_sm,
             cuda_streams: streams,
             is_cuda_active: true,
             solver_binary: find_cuda_solver_binary(),
@@ -170,6 +195,7 @@ pub fn run_cuda_solver(
     w_start: &BigUint,
     w_end: &BigUint,
     dp_bits: u32,
+    gpu_id: Option<u32>,
     _stop_flag: Arc<AtomicBool>,
 ) -> Option<KangarooResult> {
     let start_hex = format!("{:x}", w_start);
@@ -188,6 +214,17 @@ pub fn run_cuda_solver(
     let mut temp_cfg: Option<String> = None;
     let mut cmd = Command::new(solver_bin);
 
+    // Tentukan parameter device GPU:
+    // Jika ada environment variable GPU_ID (misal GPU_ID=0,1), gunakan itu.
+    // Jika tidak, gunakan assigned gpu_id per worker (round-robin multi-GPU).
+    let gpu_id_str = if let Ok(forced_gpu) = std::env::var("GPU_ID") {
+        forced_gpu
+    } else if let Some(id) = gpu_id {
+        id.to_string()
+    } else {
+        "0".to_string()
+    };
+
     if lower_bin.contains("kangaroo") {
         // JeanLucPons Kangaroo format config file:
         // Baris 1: start_hex
@@ -201,17 +238,17 @@ pub fn run_cuda_solver(
         let cfg_content = format!("{}\n{}\n{}\n", start_hex, end_hex, pub_hex);
         if std::fs::write(&tmp_path, cfg_content).is_ok() {
             temp_cfg = Some(tmp_path.clone());
-            cmd.args(["-t", "0", "-gpu", "-d", &dp_bits.to_string(), &tmp_path]);
+            cmd.args(["-t", "0", "-gpu", "-gpuId", &gpu_id_str, "-d", &dp_bits.to_string(), &tmp_path]);
         } else {
             let range_arg = format!("{}:{}", start_hex, end_hex);
-            cmd.args(["-gpu", "-d", &dp_bits.to_string(), &pub_hex, &range_arg]);
+            cmd.args(["-gpu", "-gpuId", &gpu_id_str, "-d", &dp_bits.to_string(), &pub_hex, &range_arg]);
         }
     } else if lower_bin.contains("bitcrack") {
         let range_arg = format!("{}:{}", start_hex, end_hex);
-        cmd.args(["-b", "188", "-t", "256", "-p", "256", "--keyspace", &range_arg, &pub_hex]);
+        cmd.args(["-b", "188", "-t", "256", "-p", "256", "-d", &gpu_id_str, "--keyspace", &range_arg, &pub_hex]);
     } else {
         let range_arg = format!("{}:{}", start_hex, end_hex);
-        cmd.args(["-gpu", "-d", &dp_bits.to_string(), &pub_hex, &range_arg]);
+        cmd.args(["-gpu", "-gpuId", &gpu_id_str, "-d", &dp_bits.to_string(), &pub_hex, &range_arg]);
     }
 
     let result = if let Ok(output) = cmd.output() {
@@ -244,18 +281,31 @@ pub fn run_cuda_solver(
 
 /// Inisialisasi dan verifikasi status CUDA saat aplikasi startup
 pub fn init_cuda_status() -> (bool, String) {
-    if let Some(gpu) = detect_cuda_gpu() {
-        let (cores, sm) = get_gpu_specs(&gpu.name);
+    let all_gpus = detect_all_cuda_gpus();
+    if !all_gpus.is_empty() {
+        let count = all_gpus.len();
+        let first = &all_gpus[0];
+        let (cores_per_gpu, sm_per_gpu) = get_gpu_specs(&first.name);
+        let total_cores = cores_per_gpu * (count as u32);
+        let total_sm = sm_per_gpu * (count as u32);
+        let total_vram: u64 = all_gpus.iter().map(|g| g.total_memory_mb).sum();
+
+        let display_name = if count > 1 {
+            format!("{}x {}", count, first.name)
+        } else {
+            first.name.clone()
+        };
+
         let msg = format!(
-            "NVIDIA CUDA Aktif: {} ({} Cores, {} SMs, VRAM: {} MB, Driver: {})",
-            gpu.name, cores, sm, gpu.total_memory_mb, gpu.driver_version
+            "NVIDIA CUDA Aktif: {} ({} Cores, {} SMs, Total VRAM: {} MB, Driver: {})",
+            display_name, total_cores, total_sm, total_vram, first.driver_version
         );
         info!("🚀 [CUDA ENGINE] {msg}");
 
         if let Some(bin) = find_cuda_solver_binary() {
             info!("⚡ [CUDA SOLVER] Ditemukan accelerator binary: {bin}");
         } else {
-            info!("ℹ️ [CUDA PIPELINE] Menggunakan 16-Stream Multi-Grid GPU dispatch pipeline.");
+            info!("ℹ️ [CUDA PIPELINE] Menggunakan Multi-Grid GPU dispatch pipeline.");
         }
 
         (true, msg)

@@ -364,9 +364,9 @@ async fn run_hunt_loop(
     let puzzle_num = puzzle.puzzle_number;
 
     // Deteksi mode: Public Key Exposed (Kangaroo O(√N)) vs Address Scanner (Hash160)
-    let pub_clean = puzzle.pubkey_hex.trim().trim_start_matches("0x");
+    let pub_clean = puzzle.pubkey_hex.trim().trim_start_matches("0x").to_string();
     let target_pub_bytes: Option<[u8; 33]> = if pub_clean.len() == 66 {
-        match hex::decode(pub_clean) {
+        match hex::decode(&pub_clean) {
             Ok(b) if b.len() == 33 => {
                 let mut arr = [0u8; 33];
                 arr.copy_from_slice(&b);
@@ -468,6 +468,31 @@ async fn run_hunt_loop(
         let _ = db::mark_puzzle_solved(&pool, puzzle_num, &onchain.message).await;
         update_status(&states, puzzle_num, HunterStatus::SolvedByOther);
         return;
+    }
+
+    // KANGAROO GPU CONTINUOUS MODE DISPATCH
+    // Jika puzzle memiliki public key dan mode GPU aktif, jalankan 1 continuous process Kangaroo Dual-GPU
+    // (Aman di RAM 129GB, memeras 100% 2x RTX 5090 di 5.14 GigaKeys/s, dan streaming ke web dashboard!)
+    if device_mode == DeviceMode::Gpu && target_pub_bytes.is_some() {
+        if let Some(bin) = crate::kangaroo::cuda::find_cuda_solver_binary() {
+            if bin.to_lowercase().contains("kangaroo") {
+                tracing::info!("🦘 [GPU KANGAROO] Mode Continuous Dual-GPU aktif untuk Puzzle #{puzzle_num} (Pubkey Terbuka).");
+                run_continuous_gpu_kangaroo(
+                    pool,
+                    puzzle,
+                    full_start,
+                    full_end,
+                    pub_clean.to_string(),
+                    destination_address,
+                    states,
+                    pause_flag,
+                    stop_flag,
+                    ws_tx,
+                )
+                .await;
+                return;
+            }
+        }
     }
 
     let mut round: u64 = 0;
@@ -719,96 +744,7 @@ async fn run_hunt_loop(
             if let Some(key_biguint) = result.found_key_biguint {
                 let priv_bytes = biguint_to_scalar_32(&key_biguint);
                 let priv_hex = hex::encode(priv_bytes);
-                let priv_dec = key_biguint.to_string();
-                let wif = priv_to_wif(&priv_bytes);
-
-                // Broadcast Tahap 1: Key Ditemukan
-                crate::transfer::broadcast_timeline(
-                    Some(&ws_tx),
-                    puzzle_num,
-                    "key_found",
-                    "success",
-                    "🎉 Private Key Ditemukan!",
-                    &format!("Kangaroo collision trap terdeteksi! Private key puzzle #{puzzle_num} berhasil dipecahkan."),
-                    serde_json::json!({
-                        "puzzle_number": puzzle_num,
-                        "address": puzzle.address,
-                        "priv_hex": priv_hex,
-                        "priv_dec": priv_dec,
-                        "wif": wif,
-                        "bits": puzzle.bits,
-                        "reward_btc": puzzle.reward_btc,
-                    }),
-                );
-
-                // 1. Eksekusi Auto-Transfer Instan ke Dompet Tujuan (dengan live timeline broadcast)
-                let txid = match crate::transfer::execute_auto_transfer(
-                    puzzle_num,
-                    &priv_bytes,
-                    &puzzle.address,
-                    &destination_address,
-                    Some(&ws_tx),
-                )
-                .await
-                {
-                    Ok(tx) => {
-                        tracing::info!("🚀 AUTO-TRANSFER BERHASIL! TxID: {tx}");
-                        // Jalankan pemantau konfirmasi blok Bitcoin di background
-                        let tx_clone = tx.clone();
-                        let ws_clone = ws_tx.clone();
-                        tokio::spawn(async move {
-                            crate::transfer::monitor_confirmation(puzzle_num, tx_clone, ws_clone).await;
-                        });
-                        Some(tx)
-                    }
-                    Err(e) => {
-                        tracing::error!("⚠️ Auto-transfer terkendala: {e}");
-                        None
-                    }
-                };
-
-                // 2. Simpan ke PostgreSQL
-                let _ = db::save_found_key(
-                    &pool,
-                    puzzle_num,
-                    &puzzle.address,
-                    &priv_hex,
-                    &priv_dec,
-                    &wif,
-                    txid.as_deref(),
-                )
-                .await;
-
-                // Simpan backup fisik
-                save_backup_file(puzzle_num, &priv_hex, &priv_dec, &wif, &puzzle.address);
-
-                // 4. Kirim Notifikasi Instan ke Telegram
-                let _ = crate::notify::send_telegram_alert(
-                    puzzle_num,
-                    puzzle.bits,
-                    &puzzle.address,
-                    &priv_hex,
-                    &priv_dec,
-                    &wif,
-                    txid.as_deref(),
-                    None,
-                )
-                .await;
-
-                {
-                    let mut s = states.lock().unwrap();
-                    if let Some(st) = s.get_mut(&puzzle_num) {
-                        st.status = HunterStatus::SolvedByUs;
-                        st.found_key_hex = Some(priv_hex.clone());
-                        st.found_wif = Some(wif.clone());
-
-                        if let Ok(msg) = serde_json::to_string(&*st) {
-                            let _ = ws_tx.send(msg);
-                        }
-                    }
-                }
-
-                tracing::info!("🎉🎉🎉 PUZZLE #{} SOLVED! KEY: 0x{}", puzzle_num, priv_hex);
+                handle_key_found(&pool, &puzzle, &priv_hex, &destination_address, &states, &ws_tx).await;
                 break;
             }
         }
@@ -847,6 +783,336 @@ async fn run_hunt_loop(
             break;
         }
     }
+}
+
+/// Menjalankan JeanLucPons Kangaroo sebagai continuous process pada GPU (Dual-GPU RTX 5090)
+/// untuk puzzle yang sudah memiliki Public Key (seperti Puzzle #140).
+/// Hanya 1 instance yang berjalan (menghemat RAM, aman di 129GB, dan memeras 100% 2x RTX 5090).
+async fn run_continuous_gpu_kangaroo(
+    pool: PgPool,
+    puzzle: Puzzle,
+    full_start: BigUint,
+    full_end: BigUint,
+    pub_clean: String,
+    destination_address: String,
+    states: Arc<Mutex<HashMap<i32, HunterState>>>,
+    pause_flag: Arc<AtomicBool>,
+    stop_flag: Arc<AtomicBool>,
+    ws_tx: tokio::sync::broadcast::Sender<String>,
+) {
+    let puzzle_num = puzzle.puzzle_number;
+    let _ = std::fs::create_dir_all("data");
+
+    let cfg_path = format!("data/k_target_{puzzle_num}.txt");
+    let work_path = format!("data/kang_{puzzle_num}.work");
+    let out_path = format!("data/FOUND_{puzzle_num}.txt");
+
+    let start_hex = format!("{:x}", full_start);
+    let end_hex = format!("{:x}", full_end);
+    let cfg_content = format!("{start_hex}\n{end_hex}\n{pub_clean}\n");
+    if let Err(e) = std::fs::write(&cfg_path, &cfg_content) {
+        tracing::error!("Gagal menulis berkas konfigurasi Kangaroo: {e}");
+        return;
+    }
+
+    let bin = crate::kangaroo::cuda::find_cuda_solver_binary()
+        .unwrap_or_else(|| "kangaroo".to_string());
+
+    let gpu_count = crate::kangaroo::cuda::get_gpu_count();
+    let gpu_id_str = if gpu_count > 1 { "0,1".to_string() } else { "0".to_string() };
+
+    let mut args = vec![
+        "-t".to_string(), "0".to_string(),
+        "-gpu".to_string(),
+        "-gpuId".to_string(), gpu_id_str,
+        "-d".to_string(), "10".to_string(),
+        "-w".to_string(), work_path.clone(),
+        "-wi".to_string(), "30".to_string(),
+        "-ws".to_string(),
+        "-o".to_string(), out_path.clone(),
+    ];
+
+    if std::path::Path::new(&work_path).exists() {
+        tracing::info!("📁 Ditemukan checkpoint progres Kangaroo: {work_path}. Melanjutkan dari state terakhir (-i).");
+        args.push("-i".to_string());
+        args.push(work_path.clone());
+    }
+    args.push(cfg_path.clone());
+
+    // Update state awal di memory & websocket
+    {
+        let mut s = states.lock().unwrap();
+        if let Some(st) = s.get_mut(&puzzle_num) {
+            st.last_window_hex = "🚀 Inisialisasi 2x RTX 5090 Kangaroo (Membuat Kanguru di GPU ~40s)...".to_string();
+            st.active_workers = 1;
+            st.is_kangaroo_mode = true;
+            st.device_mode = "gpu".to_string();
+            st.gpu_info = Some(crate::kangaroo::cuda::get_telemetry(1));
+            if let Ok(msg) = serde_json::to_string(&*st) {
+                let _ = ws_tx.send(msg);
+            }
+        }
+    }
+
+    let mut child = match tokio::process::Command::new(&bin)
+        .args(&args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("Gagal menjalankan Kangaroo binary: {e}");
+            update_status(&states, puzzle_num, HunterStatus::Error(format!("Gagal execute kangaroo: {e}")));
+            return;
+        }
+    };
+
+    use tokio::io::AsyncBufReadExt;
+    let stdout = match child.stdout.take() {
+        Some(s) => s,
+        None => {
+            tracing::error!("Gagal mengambil child stdout");
+            return;
+        }
+    };
+    let mut reader = tokio::io::BufReader::new(stdout).lines();
+
+    let mut found_priv_hex: Option<String> = None;
+    let mut round_counter: u64 = 0;
+
+    loop {
+        tokio::select! {
+            _ = tokio::time::sleep(tokio::time::Duration::from_millis(500)) => {
+                // Cek stop flag / pause flag
+                if pause_flag.load(Ordering::Relaxed) || stop_flag.load(Ordering::Relaxed) {
+                    tracing::info!("⏸️ [KANGAROO PAUSE] Menjeda hunter Kangaroo puzzle #{puzzle_num}...");
+                    let _ = child.kill().await;
+                    update_status(&states, puzzle_num, HunterStatus::Paused);
+                    if let Some(st) = states.lock().unwrap().get(&puzzle_num) {
+                        if let Ok(msg) = serde_json::to_string(st) {
+                            let _ = ws_tx.send(msg);
+                        }
+                    }
+                    break;
+                }
+
+                // Cek file output apakah kunci sudah tertulis
+                if let Ok(content) = std::fs::read_to_string(&out_path) {
+                    if let Some(k) = extract_key_from_text(&content) {
+                        found_priv_hex = Some(k);
+                        let _ = child.kill().await;
+                        break;
+                    }
+                }
+            }
+            line_res = reader.next_line() => {
+                match line_res {
+                    Ok(Some(l)) => {
+                        // Parse status kecepatan Kangaroo
+                        // Format: [5140.26 MK/s][GPU 5140.26 MK/s][Count 2^38.57][Dead 2]...
+                        if l.contains("MK/s") || l.contains("GK/s") || l.contains("KK/s") {
+                            round_counter += 1;
+                            let parsed_kps = parse_kangaroo_speed(&l);
+                            let parsed_count = parse_kangaroo_count(&l);
+
+                            let mut s = states.lock().unwrap();
+                            if let Some(st) = s.get_mut(&puzzle_num) {
+                                if let Some(kps) = parsed_kps {
+                                    st.keys_per_second = kps;
+                                }
+                                if let Some(count) = parsed_count {
+                                    st.total_keys_checked = count;
+                                }
+                                st.round = round_counter;
+                                st.last_window_hex = "⚡ 2x RTX 5090 Aktif • Pollard's Kangaroo O(√N) Full Space".to_string();
+                                if let Ok(msg) = serde_json::to_string(&*st) {
+                                    let _ = ws_tx.send(msg);
+                                }
+                            }
+                        }
+
+                        // Parse private key jika ditemukan langsung di stdout
+                        if l.contains("Key#") || l.contains("PRIVKEY:") || l.contains("Found:") || l.contains("Priv:") {
+                            if let Some(k) = extract_key_from_text(&l) {
+                                found_priv_hex = Some(k);
+                                let _ = child.kill().await;
+                                break;
+                            }
+                        }
+                    }
+                    Ok(None) => break, // Process exited
+                    Err(_) => break,
+                }
+            }
+        }
+    }
+
+    // Jika private key ditemukan, eksekusi auto-sweep & perayaan!
+    if let Some(priv_hex) = found_priv_hex {
+        handle_key_found(
+            &pool,
+            &puzzle,
+            &priv_hex,
+            &destination_address,
+            &states,
+            &ws_tx,
+        ).await;
+    }
+}
+
+async fn handle_key_found(
+    pool: &PgPool,
+    puzzle: &Puzzle,
+    priv_hex: &str,
+    destination_address: &str,
+    states: &Arc<Mutex<HashMap<i32, HunterState>>>,
+    ws_tx: &tokio::sync::broadcast::Sender<String>,
+) {
+    let puzzle_num = puzzle.puzzle_number;
+    let priv_bytes_vec = match hex::decode(priv_hex.trim_start_matches("0x")) {
+        Ok(b) if b.len() == 32 => b,
+        _ => {
+            tracing::error!("Format private key tidak valid: {priv_hex}");
+            return;
+        }
+    };
+    let mut priv_bytes = [0u8; 32];
+    priv_bytes.copy_from_slice(&priv_bytes_vec);
+
+    let key_biguint = BigUint::from_bytes_be(&priv_bytes);
+    let priv_dec = key_biguint.to_string();
+    let wif = priv_to_wif(&priv_bytes);
+
+    // Broadcast Tahap 1: Key Ditemukan
+    crate::transfer::broadcast_timeline(
+        Some(ws_tx),
+        puzzle_num,
+        "key_found",
+        "success",
+        "🎉 Private Key Ditemukan!",
+        &format!("Kangaroo collision trap terdeteksi! Private key puzzle #{puzzle_num} berhasil dipecahkan."),
+        serde_json::json!({
+            "puzzle_number": puzzle_num,
+            "address": puzzle.address,
+            "priv_hex": priv_hex,
+            "priv_dec": priv_dec,
+            "wif": wif,
+            "bits": puzzle.bits,
+            "reward_btc": puzzle.reward_btc,
+        }),
+    );
+
+    // 1. Eksekusi Auto-Transfer Instan ke Dompet Tujuan
+    let txid = match crate::transfer::execute_auto_transfer(
+        puzzle_num,
+        &priv_bytes,
+        &puzzle.address,
+        destination_address,
+        Some(ws_tx),
+    )
+    .await
+    {
+        Ok(tx) => {
+            tracing::info!("🚀 AUTO-TRANSFER BERHASIL! TxID: {tx}");
+            let tx_clone = tx.clone();
+            let ws_clone = ws_tx.clone();
+            tokio::spawn(async move {
+                crate::transfer::monitor_confirmation(puzzle_num, tx_clone, ws_clone).await;
+            });
+            Some(tx)
+        }
+        Err(e) => {
+            tracing::error!("⚠️ Auto-transfer terkendala: {e}");
+            None
+        }
+    };
+
+    // 2. Simpan ke PostgreSQL
+    let _ = db::save_found_key(
+        pool,
+        puzzle_num,
+        &puzzle.address,
+        priv_hex,
+        &priv_dec,
+        &wif,
+        txid.as_deref(),
+    )
+    .await;
+
+    // 3. Simpan backup fisik
+    save_backup_file(puzzle_num, priv_hex, &priv_dec, &wif, &puzzle.address);
+
+    // 4. Kirim Notifikasi Instan ke Telegram
+    let _ = crate::notify::send_telegram_alert(
+        puzzle_num,
+        puzzle.bits,
+        &puzzle.address,
+        priv_hex,
+        &priv_dec,
+        &wif,
+        txid.as_deref(),
+        None,
+    )
+    .await;
+
+    {
+        let mut s = states.lock().unwrap();
+        if let Some(st) = s.get_mut(&puzzle_num) {
+            st.status = HunterStatus::SolvedByUs;
+            st.found_key_hex = Some(priv_hex.to_string());
+            st.found_wif = Some(wif.clone());
+
+            if let Ok(msg) = serde_json::to_string(&*st) {
+                let _ = ws_tx.send(msg);
+            }
+        }
+    }
+
+    tracing::info!("🎉🎉🎉 PUZZLE #{} SOLVED! KEY: 0x{}", puzzle_num, priv_hex);
+}
+
+fn parse_kangaroo_speed(line: &str) -> Option<f64> {
+    let start = line.find('[')?;
+    let end = line[start..].find(']')? + start;
+    let chunk = &line[start + 1..end];
+    let parts: Vec<&str> = chunk.split_whitespace().collect();
+    if parts.len() >= 2 {
+        let val: f64 = parts[0].parse().ok()?;
+        let unit = parts[1];
+        if unit.starts_with("GK") {
+            Some(val * 1_000_000_000.0)
+        } else if unit.starts_with("MK") {
+            Some(val * 1_000_000.0)
+        } else if unit.starts_with("KK") {
+            Some(val * 1_000.0)
+        } else {
+            Some(val)
+        }
+    } else {
+        None
+    }
+}
+
+fn parse_kangaroo_count(line: &str) -> Option<u64> {
+    if let Some(idx) = line.find("[Count 2^") {
+        let sub = &line[idx + 9..];
+        let end = sub.find(']')?;
+        let power: f64 = sub[..end].parse().ok()?;
+        Some((2.0f64.powf(power)) as u64)
+    } else {
+        None
+    }
+}
+
+fn extract_key_from_text(text: &str) -> Option<String> {
+    for word in text.split_whitespace() {
+        let clean = word.trim().trim_start_matches("0x").trim_matches(|c| c == '[' || c == ']');
+        if clean.len() == 64 && clean.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Some(clean.to_lowercase());
+        }
+    }
+    None
 }
 
 // ===== Utility Helpers =====

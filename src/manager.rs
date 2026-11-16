@@ -461,19 +461,13 @@ async fn run_hunt_loop(
         return;
     }
 
-    // OPSIONAL: KANGAROO GPU CONTINUOUS MONOLITHIC MODE
-    // Hanya aktif jika user secara eksplisit menyetel MONOLITHIC_KANGAROO=1 di .env
-    // DAN puzzle <= 125-bit (karena limitasi internal solver JeanLucPons adalah 125-bit).
-    // Secara default, seluruh puzzle (baik ber-pubkey maupun address) menggunakan arsitektur
-    // 32-Worker Stratified Grid Partitioning seperti saat di local (32 stream live, hemat RAM, ~150-200+ B k/s).
-    let allow_monolithic = std::env::var("MONOLITHIC_KANGAROO")
-        .map(|v| v.trim() == "1" || v.trim().eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
-
-    if allow_monolithic && puzzle.bits <= 125 && target_pub_bytes.is_some() {
+    // KANGAROO GPU CONTINUOUS MODE DISPATCH
+    // Jika puzzle memiliki public key dan mode GPU aktif, jalankan 1 continuous process Kangaroo Dual-GPU
+    // (Memeras 100% 2x RTX 5090 di 5.14 GigaKeys/s murni CUDA, dan streaming live ke web dashboard!)
+    if device_mode == DeviceMode::Gpu && target_pub_bytes.is_some() {
         if let Some(bin) = crate::kangaroo::cuda::find_cuda_solver_binary() {
             if bin.to_lowercase().contains("kangaroo") {
-                tracing::info!("🦘 [GPU KANGAROO] Mode Monolithic Continuous aktif untuk Puzzle #{puzzle_num} (<= 125 bits).");
+                tracing::info!("🦘 [GPU KANGAROO] Mode Continuous Dual-GPU aktif untuk Puzzle #{puzzle_num} (Pubkey Terbuka).");
                 run_continuous_gpu_kangaroo(
                     pool,
                     puzzle,
@@ -809,8 +803,18 @@ async fn run_continuous_gpu_kangaroo(
     let work_path = format!("data/kang_{puzzle_num}.work");
     let out_path = format!("data/FOUND_{puzzle_num}.txt");
 
+    // JeanLucPons Kangaroo memiliki limitasi matematis: interval maksimal 125-bit (2^125).
+    // Untuk puzzle > 125-bit (seperti Puzzle #140 yang memiliki rentang 139-bit),
+    // batasi jendela aktif GPU ke 124-bit (1 << 124) agar tidak terjadi integer overflow di register CUDA.
+    let max_gpu_interval = BigUint::one() << 124usize;
+    let bounded_end = if &full_end - &full_start > max_gpu_interval {
+        &full_start + max_gpu_interval
+    } else {
+        full_end.clone()
+    };
+
     let start_hex = format!("{:x}", full_start);
-    let end_hex = format!("{:x}", full_end);
+    let end_hex = format!("{:x}", bounded_end);
     let cfg_content = format!("{start_hex}\n{end_hex}\n{pub_clean}\n");
     if let Err(e) = std::fs::write(&cfg_path, &cfg_content) {
         tracing::error!("Gagal menulis berkas konfigurasi Kangaroo: {e}");

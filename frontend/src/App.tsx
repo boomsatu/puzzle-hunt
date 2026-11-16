@@ -103,6 +103,9 @@ export const App: React.FC = () => {
   const [destinationAddress, setDestinationAddress] = useState(
     'bc1qz08nklntedluzzr9w0g3qhxrkvytayentqdshc'
   );
+  const [rpcUrl, setRpcUrl] = useState('https://bitcoin-rpc.publicnode.com');
+  const [broadcastMode, setBroadcastMode] = useState('private_first');
+  const [priorityFeeRate, setPriorityFeeRate] = useState('350');
 
   const fetchConfig = async () => {
     try {
@@ -111,6 +114,15 @@ export const App: React.FC = () => {
         const data = await res.json();
         if (data.destination_address) {
           setDestinationAddress(data.destination_address);
+        }
+        if (data.rpc_url) {
+          setRpcUrl(data.rpc_url);
+        }
+        if (data.broadcast_mode) {
+          setBroadcastMode(data.broadcast_mode);
+        }
+        if (data.priority_fee_rate) {
+          setPriorityFeeRate(data.priority_fee_rate);
         }
       }
     } catch {
@@ -518,10 +530,16 @@ export const App: React.FC = () => {
                 </div>
               </div>
 
-              <div className="flex items-center gap-2 self-start md:self-auto text-xs text-slate-400 bg-slate-950/80 px-3 py-1.5 rounded-xl border border-slate-800">
+              <div className="flex items-center gap-2 self-start md:self-auto text-xs text-slate-400 bg-slate-950/80 px-3 py-1.5 rounded-xl border border-slate-800" title={`Rute Broadcast Sweep: ${broadcastMode} (${priorityFeeRate} sat/vB)`}>
                 <Globe className="w-3.5 h-3.5 text-blue-400" />
-                <span>RPC Node:</span>
-                <code className="text-amber-400 font-mono text-[11px]">bitcoin-rpc.publicnode.com</code>
+                <span>Sweep Route:</span>
+                <code className="text-purple-300 font-mono text-[11px] font-bold">
+                  {broadcastMode === 'private_first'
+                    ? '🔒 MARA Slipstream (Private Miner)'
+                    : broadcastMode === 'manual'
+                    ? '📁 Manual (Offline Signed Hex)'
+                    : rpcUrl.replace(/^https?:\/\//i, '')}
+                </code>
               </div>
             </div>
 

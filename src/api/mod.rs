@@ -92,13 +92,20 @@ async fn get_config() -> (StatusCode, Json<Value>) {
         .or_else(|_| std::env::var("DEVICE_MODE"))
         .unwrap_or_else(|_| "local".to_string())
         .to_lowercase();
+    let broadcast_mode = std::env::var("BROADCAST_MODE")
+        .unwrap_or_else(|_| "private_first".to_string())
+        .to_lowercase();
+    let fee_rate = std::env::var("PRIORITY_FEE_RATE")
+        .unwrap_or_else(|_| "350".to_string());
 
     (
         StatusCode::OK,
         Json(json!({
             "destination_address": dest,
             "rpc_url": rpc,
-            "device_mode": mode
+            "device_mode": mode,
+            "broadcast_mode": broadcast_mode,
+            "priority_fee_rate": fee_rate
         })),
     )
 }

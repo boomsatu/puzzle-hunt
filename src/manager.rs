@@ -353,7 +353,7 @@ fn get_optimal_workers(states: &Arc<Mutex<HashMap<i32, HunterState>>>, mode: Dev
 async fn run_hunt_loop(
     pool: PgPool,
     puzzle: Puzzle,
-    window_bits: u32,
+    _window_bits: u32,
     check_interval_secs: u64,
     destination_address: String,
     states: Arc<Mutex<HashMap<i32, HunterState>>>,
@@ -393,29 +393,20 @@ async fn run_hunt_loop(
     // Deteksi device mode seawal mungkin untuk menentukan parameter window optimal
     let device_mode = DeviceMode::from_env();
 
-    // Hitung window bits optimal berdasarkan device mode dan tipe puzzle
+    // Hitung window bits optimal berdasarkan tipe puzzle dan mode device:
     let total_range_bits = if puzzle.bits > 2 { (puzzle.bits - 1) as u32 } else { 1 };
-    let effective_window_bits = match device_mode {
-        DeviceMode::Gpu => {
-            // GPU: 8 worker × 2^30 = 8.59B keys/round — CUDA driver serialize via time-slicing
-            // Window 2^30 = 1.073.741.824 keys per worker — sweet spot: ~134ms per window @8B k/s
-            // Total round: 8 × ~140ms = ~1,120ms (GPU utilization ~95%)
-            // Ini memberikan 8 posisi jump berbeda per ronde = coverage menyebar!
-            30u32.min(total_range_bits.saturating_sub(1).max(8))
-        }
-        _ => {
-            if target_pub_bytes.is_some() {
-                // Kangaroo mode (CPU): window_bits default 30 (1.073.741.824 keys)
-                if total_range_bits > 30 {
-                    window_bits.min(total_range_bits - 1)
-                } else {
-                    total_range_bits.saturating_sub(1).max(8)
-                }
-            } else {
-                // Address scanner (CPU): cap at 18 bits (~262K keys/worker)
-                window_bits.min(18).min(total_range_bits.saturating_sub(1).max(8))
-            }
-        }
+    let effective_window_bits = if target_pub_bytes.is_some() {
+        // Kangaroo Mode (Public Key Tersedia, e.g. Puzzle #140):
+        // Menggunakan window 2^30 = 1.073.741.824 keys per worker.
+        // Karena kompleksitas Kangaroo adalah O(√N), window 2^30 hanya memerlukan ~32.768 langkah EC
+        // yang selesai dalam hitungan milidetik (~5ms per worker)!
+        // 32 worker serentak = 34.35 Miliar keys/ronde (~0.18s) -> Throughput 150 - 200+ B k/s!
+        30u32.min(total_range_bits.saturating_sub(1).max(8))
+    } else {
+        // Address Scanner Mode (Hash160 only, e.g. Puzzle #71):
+        // Pengecekan sekuensial linear O(N). Dibatasi ke 18-bit (~262.144 keys/worker)
+        // agar setiap ronde tetap cepat (< 0.3s) dan UI bergerak lincah tanpa lagging.
+        18u32.min(total_range_bits.saturating_sub(1).max(8))
     };
 
     // Parse rentang awal dan akhir dari database
@@ -470,13 +461,19 @@ async fn run_hunt_loop(
         return;
     }
 
-    // KANGAROO GPU CONTINUOUS MODE DISPATCH
-    // Jika puzzle memiliki public key dan mode GPU aktif, jalankan 1 continuous process Kangaroo Dual-GPU
-    // (Aman di RAM 129GB, memeras 100% 2x RTX 5090 di 5.14 GigaKeys/s, dan streaming ke web dashboard!)
-    if device_mode == DeviceMode::Gpu && target_pub_bytes.is_some() {
+    // OPSIONAL: KANGAROO GPU CONTINUOUS MONOLITHIC MODE
+    // Hanya aktif jika user secara eksplisit menyetel MONOLITHIC_KANGAROO=1 di .env
+    // DAN puzzle <= 125-bit (karena limitasi internal solver JeanLucPons adalah 125-bit).
+    // Secara default, seluruh puzzle (baik ber-pubkey maupun address) menggunakan arsitektur
+    // 32-Worker Stratified Grid Partitioning seperti saat di local (32 stream live, hemat RAM, ~150-200+ B k/s).
+    let allow_monolithic = std::env::var("MONOLITHIC_KANGAROO")
+        .map(|v| v.trim() == "1" || v.trim().eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
+    if allow_monolithic && puzzle.bits <= 125 && target_pub_bytes.is_some() {
         if let Some(bin) = crate::kangaroo::cuda::find_cuda_solver_binary() {
             if bin.to_lowercase().contains("kangaroo") {
-                tracing::info!("🦘 [GPU KANGAROO] Mode Continuous Dual-GPU aktif untuk Puzzle #{puzzle_num} (Pubkey Terbuka).");
+                tracing::info!("🦘 [GPU KANGAROO] Mode Monolithic Continuous aktif untuk Puzzle #{puzzle_num} (<= 125 bits).");
                 run_continuous_gpu_kangaroo(
                     pool,
                     puzzle,
@@ -514,11 +511,12 @@ async fn run_hunt_loop(
             } else {
                 tracing::warn!("⚠️ [SETUP GPU] CUDA solver binary tidak ditemukan — fallback ke Rust CPU engine (sangat lambat dengan window 2^{}).", effective_window_bits);
             }
+            let num_w = get_optimal_workers(&states, device_mode);
             let gpu_window_keys: u64 = 1u64 << effective_window_bits;
-            let gpu_total_round = gpu_window_keys * 16; // 16 workers
+            let gpu_total_round = gpu_window_keys * (num_w as u64);
             tracing::info!(
-                "🎯 [GPU CONFIG] 16 workers × 2^{} = {} keys/worker, total {}/round (~{:.1}s/round est. @8B k/s)",
-                effective_window_bits, gpu_window_keys, gpu_total_round, gpu_total_round as f64 / 8_000_000_000.0
+                "🎯 [WORKER CONFIG] {} workers × 2^{} = {} keys/worker, total {} keys/round",
+                num_w, effective_window_bits, gpu_window_keys, gpu_total_round
             );
         }
     }
@@ -631,19 +629,23 @@ async fn run_hunt_loop(
             tokio::task::spawn_blocking(move || {
                 if mode == DeviceMode::Gpu {
                     if let Some(bin) = crate::kangaroo::cuda::find_cuda_solver_binary() {
-                        if let Some(res) = crate::kangaroo::cuda::run_cuda_solver(
-                            &bin,
-                            target_pub.as_ref(),
-                            target_h160.as_ref(),
-                            &ws_clone,
-                            &we_clone,
-                            dp_bits,
-                            stop_inner.clone(),
-                        ) {
-                            return (win_id, ws_clone, we_clone, res);
+                        let lower_bin = bin.to_lowercase();
+                        // Jangan jalankan JeanLucPons kangaroo binary per-window berulang di 32 worker
+                        // karena setiap invokasi mengalokasikan 21GB RAM dan overhead startup GPU 42 detik.
+                        // Hanya panggil solver eksternal jika merupakan bitcrack atau keyhunt.
+                        if !lower_bin.contains("kangaroo") {
+                            if let Some(res) = crate::kangaroo::cuda::run_cuda_solver(
+                                &bin,
+                                target_pub.as_ref(),
+                                target_h160.as_ref(),
+                                &ws_clone,
+                                &we_clone,
+                                dp_bits,
+                                stop_inner.clone(),
+                            ) {
+                                return (win_id, ws_clone, we_clone, res);
+                            }
                         }
-                    } else {
-                        tracing::warn!("⚠️ [GPU FALLBACK] CUDA solver binary tidak ditemukan! Fallback ke Rust CPU engine — window besar akan sangat lambat.");
                     }
                 }
 

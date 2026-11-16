@@ -331,11 +331,21 @@ fn get_optimal_workers(states: &Arc<Mutex<HashMap<i32, HunterState>>>, mode: Dev
             per_puzzle.max(1)
         }
         DeviceMode::Gpu => {
-            // Mode GPU: 16 worker windows per round — maksimalkan coverage posisi random!
-            // CUDA driver men-serialize proses via time-slicing (1 aktif di GPU per waktu).
-            // 16 lokasi jump berbeda per ronde = probabilitas menemukan key lebih besar.
-            // Total: 16 × 2^30 = 17.18B keys/round (~2.3s/round @8B k/s)
-            16
+            // Mode GPU: Ambil dari GPU_WORKERS di .env jika ada,
+            // atau otomatis sesuaikan dengan kapasitas core CPU host:
+            // Pada server 48-Core AMD EPYC, gunakan 32 workers agar throughput GPU melonjak ke ~200+ B k/s!
+            if let Ok(workers_str) = std::env::var("GPU_WORKERS") {
+                if let Ok(w) = workers_str.parse::<usize>() {
+                    return w.clamp(4, 64);
+                }
+            }
+            if total_cpus >= 32 {
+                32
+            } else if total_cpus >= 16 {
+                16
+            } else {
+                8
+            }
         }
     }
 }

@@ -19,17 +19,17 @@ cd "$PROJECT_DIR"
 mkdir -p "$PROJECT_DIR/bin"
 
 # 1. Pastikan dependensi compiler & GMP terpasang
-echo -e "${CYAN}[1/4] Memeriksa dependensi compiler & GMP...${NC}"
+echo -e "${CYAN}[1/5] Memeriksa dependensi compiler & GMP...${NC}"
 SUDO=""
 if command -v sudo &>/dev/null; then SUDO="sudo"; fi
 
 if command -v apt-get &>/dev/null; then
     $SUDO apt-get update -qq
-    $SUDO apt-get install -y -qq build-essential libgmp-dev libssl-dev git wget
+    $SUDO apt-get install -y -qq build-essential libgmp-dev libssl-dev git wget python3
 fi
 
 # 2. Deteksi nvcc & CUDA SDK
-echo -e "\n${CYAN}[2/4] Memeriksa CUDA Toolkit...${NC}"
+echo -e "\n${CYAN}[2/5] Memeriksa CUDA Toolkit...${NC}"
 if ! command -v nvcc &>/dev/null; then
     if [ -f "/usr/local/cuda/bin/nvcc" ]; then
         export PATH="/usr/local/cuda/bin:$PATH"
@@ -50,25 +50,100 @@ if [ ! -d "$CUDA_DIR" ]; then
     CUDA_DIR=$(dirname $(dirname $(which nvcc)))
 fi
 
-# 3. Clone atau update JeanLucPons Kangaroo
-echo -e "\n${CYAN}[3/4] Mengunduh repository JeanLucPons/Kangaroo...${NC}"
+HOST_CXX="$(which g++)"
+echo -e "   Host C++ Comp : ${GREEN}$HOST_CXX${NC}"
+
+# 3. Clone repository JeanLucPons/Kangaroo
+echo -e "\n${CYAN}[3/5] Mengunduh repository JeanLucPons/Kangaroo...${NC}"
 BUILD_DIR="/tmp/Kangaroo_build"
 rm -rf "$BUILD_DIR"
 git clone --depth 1 https://github.com/JeanLucPons/Kangaroo.git "$BUILD_DIR"
 cd "$BUILD_DIR"
 
-# 4. Compile dengan CUDA
-echo -e "\n${CYAN}[4/4] Mengompilasi solver Kangaroo dengan GPU CUDA...${NC}"
+# 4. Patch compatibility untuk GCC 13/14 & C++ standard library (<cstdint>)
+echo -e "\n${CYAN}[4/5] Menerapkan patch compatibility GCC 13/14 (<cstdint>)...${NC}"
+python3 -c "
+import os, glob
+
+patterns = ['**/*.h', '**/*.hpp', '**/*.cpp', '**/*.cu']
+files = []
+for p in patterns:
+    files.extend(glob.glob(p, recursive=True))
+
+patched = 0
+for filepath in files:
+    if os.path.isfile(filepath):
+        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+            content = f.read()
+        if '#include <cstdint>' not in content and '#include <stdint.h>' not in content:
+            new_content = '#include <cstdint>\n#include <stdint.h>\n' + content
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write(new_content)
+            patched += 1
+print(f'   ✅ Berhasil mem-patch {patched} source files dengan <cstdint>')
+"
+
+# 5. Deteksi Compute Capability GPU & Konfigurasi Makefile
+echo -e "\n${CYAN}[5/5] Mengonfigurasi arsitektur GPU CUDA & Makefile...${NC}"
+DETECTED_CCAP=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | tr -d '.' | head -n1 | tr -d '[:space:]')
+echo -e "   Detected GPU CCAP: ${YELLOW}${DETECTED_CCAP:-unknown}${NC}"
+
+TARGET_CCAP=""
+if [ -n "$DETECTED_CCAP" ]; then
+    if nvcc -arch=compute_${DETECTED_CCAP} -E -x cu /dev/null -o /dev/null 2>/dev/null; then
+        TARGET_CCAP="$DETECTED_CCAP"
+    fi
+fi
+
+if [ -z "$TARGET_CCAP" ]; then
+    for arch in 120 100 90 89 86 80 75 70 61; do
+        if nvcc -arch=compute_${arch} -E -x cu /dev/null -o /dev/null 2>/dev/null; then
+            TARGET_CCAP="$arch"
+            break
+        fi
+    done
+fi
+
+TARGET_CCAP="${TARGET_CCAP:-89}"
+echo -e "   Target CUDA CCAP : ${GREEN}$TARGET_CCAP${NC}"
+
+# Patch Makefile:
+# 1) Perbarui CXXCUDA agar mengarah ke host g++ aktif
+sed -i "s|CXXCUDA    = /usr/bin/g++-4.8|CXXCUDA    = $HOST_CXX|g" Makefile
+
+# 2) Tambahkan include cstdint ke CXXFLAGS
+sed -i 's/-DWITHGPU/-DWITHGPU -include cstdint -include stdint.h/g' Makefile
+
+# 3) Tambahkan PTX fallback generator agar kompatibel dengan arsitektur GPU Blackwell/baru
+sed -i "s/-gencode=arch=compute_\$(ccap),code=sm_\$(ccap)/-gencode=arch=compute_\$(ccap),code=sm_\$(ccap) -gencode=arch=compute_\$(ccap),code=compute_\$(ccap)/g" Makefile
+
+# 6. Kompilasi
+echo -e "\n${CYAN}🔨 Mengompilasi solver Kangaroo dengan GPU CUDA (ccap=$TARGET_CCAP)...${NC}"
 make clean 2>/dev/null || true
-make gpu=1 CUDA="$CUDA_DIR" all
+make gpu=1 CUDA="$CUDA_DIR" CXXCUDA="$HOST_CXX" ccap="$TARGET_CCAP" all
 
-# Salin binary ke lokasi yang dideteksi otomatis oleh engine
-cp -f Kangaroo "$PROJECT_DIR/bin/kangaroo"
+# 7. Salin binary ke direktori puzzle-hunt dan sistem
+echo -e "\n${CYAN}📦 Menginstal executable solver...${NC}"
+SOLVER_BIN=""
+if [ -f "kangaroo" ]; then
+    SOLVER_BIN="kangaroo"
+elif [ -f "Kangaroo" ]; then
+    SOLVER_BIN="Kangaroo"
+fi
+
+if [ -z "$SOLVER_BIN" ]; then
+    echo -e "${RED}❌ Kompilasi gagal: binary kangaroo tidak ditemukan!${NC}"
+    exit 1
+fi
+
+cp -f "$SOLVER_BIN" "$PROJECT_DIR/bin/kangaroo"
 chmod +x "$PROJECT_DIR/bin/kangaroo"
-$SUDO cp -f Kangaroo /usr/local/bin/kangaroo 2>/dev/null || true
+$SUDO cp -f "$SOLVER_BIN" /usr/local/bin/kangaroo 2>/dev/null || true
+$SUDO chmod +x /usr/local/bin/kangaroo 2>/dev/null || true
 
-echo -e "\n${GREEN}${BOLD}🎉 SELESAI! Binary Kangaroo CUDA siap di:${NC}"
+echo -e "\n${GREEN}${BOLD}🎉 SELESAI! Binary Kangaroo CUDA berhasil dipasang:${NC}"
 echo -e "   📁 $PROJECT_DIR/bin/kangaroo"
 echo -e "   📁 /usr/local/bin/kangaroo"
 echo ""
+echo -e "${CYAN}Tes verifikasi help output:${NC}"
 "$PROJECT_DIR/bin/kangaroo" -h 2>&1 | head -5 || true

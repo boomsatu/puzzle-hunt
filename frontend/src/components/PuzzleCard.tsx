@@ -200,75 +200,98 @@ export const PuzzleCard: React.FC<PuzzleCardProps> = ({ puzzle, hunter, destinat
         </div>
 
         {/* Live Hunter Metrics */}
-        {hunter && (
-          <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-800/60 text-xs">
-            <div className="p-2.5 bg-slate-950/50 border border-slate-800/60 rounded-xl">
-              <div className="flex items-center justify-between text-slate-400 text-[11px] mb-1">
-                <div className="flex items-center gap-1.5">
-                  <Zap className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Speed / dt</span>
-                </div>
-                {hunter.active_workers && hunter.active_workers > 1 && (
-                  <span className="text-[10px] text-amber-400 font-semibold bg-amber-500/10 px-1 rounded border border-amber-500/20" title={`Menggunakan ${hunter.active_workers} CPU worker threads paralel`}>
-                    ⚡ {hunter.active_workers} Core
-                  </span>
-                )}
-              </div>
-              <div className="text-sm font-bold text-white font-mono">
-                {hunter.keys_per_second > 0
-                  ? formatKeysSpeed(hunter.keys_per_second)
-                  : '0 k/s'}
-              </div>
-            </div>
+        {hunter && (() => {
+          const isGpuMode = hunter.device_mode === 'gpu' || Boolean(hunter.gpu_info);
+          const cardKeysPerBlock = hunter.window_keys
+            ? hunter.window_keys
+            : Math.pow(
+                2,
+                hunter.window_bits
+                  ? hunter.window_bits
+                  : isGpuMode
+                  ? 30
+                  : puzzle.pubkey_hex && puzzle.pubkey_hex.length === 66
+                  ? windowBits
+                  : Math.min(windowBits, 18)
+              );
+          const cardTotalHistoricalKeys = Math.max(
+            hunter.windows_scanned * cardKeysPerBlock,
+            hunter.total_keys_checked || 0
+          );
 
-            <div className="p-2.5 bg-slate-950/50 border border-slate-800/60 rounded-xl">
-              <div className="flex items-center gap-1.5 text-slate-400 text-[11px] mb-1">
-                <Layers className="w-3.5 h-3.5 text-blue-400" />
-                <span>Windows (Postgres)</span>
-              </div>
-              <div className="text-sm font-bold text-white font-mono">
-                {hunter.windows_scanned.toLocaleString()}
-              </div>
-              <div
-                className="text-[10px] text-blue-400 font-mono mt-0.5 truncate"
-                title={`Total Kunci: ${(hunter.windows_scanned * Math.pow(2, puzzle.pubkey_hex && puzzle.pubkey_hex.length === 66 ? windowBits : Math.min(windowBits, 18))).toLocaleString()} keys`}
-              >
-                ~{formatCompactKeys(hunter.windows_scanned * Math.pow(2, puzzle.pubkey_hex && puzzle.pubkey_hex.length === 66 ? windowBits : Math.min(windowBits, 18)))} keys
-              </div>
-            </div>
-
-            <div className="col-span-2 p-2.5 bg-slate-950/50 border border-slate-800/60 rounded-xl">
-              <div className="flex items-center justify-between text-[11px] text-slate-400 mb-1">
-                <div className="flex items-center gap-1.5">
-                  <Activity className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>Ronde {hunter.round}</span>
-                </div>
-                <span>Total: {formatLargeNumber(hunter.total_keys_checked)}</span>
-              </div>
-              {hunter.last_window_hex && (() => {
-                const parsed = parseWindowHexRange(hunter.last_window_hex);
-                const progress = parsed.startHex
-                  ? calculateRangePercentage(parsed.startHex, puzzle.range_start_hex, puzzle.range_end_hex, 2)
-                  : null;
-
-                return (
-                  <div className="mt-1 space-y-1">
-                    <div className="flex items-center justify-between text-[10px] gap-1">
-                      <span className="font-mono text-slate-400 truncate" title={hunter.last_window_hex}>
-                        {hunter.last_window_hex}
-                      </span>
-                      {progress && (
-                        <span className="font-mono text-amber-400 font-bold bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20 shrink-0">
-                          {progress.formatted}
-                        </span>
-                      )}
-                    </div>
+          return (
+            <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-800/60 text-xs">
+              <div className="p-2.5 bg-slate-950/50 border border-slate-800/60 rounded-xl">
+                <div className="flex items-center justify-between text-slate-400 text-[11px] mb-1">
+                  <div className="flex items-center gap-1.5">
+                    <Zap className={`w-3.5 h-3.5 ${isGpuMode ? 'text-purple-400 fill-purple-400/30' : 'text-amber-400'}`} />
+                    <span>Speed / dt</span>
                   </div>
-                );
-              })()}
+                  {hunter.active_workers && hunter.active_workers > 1 && (
+                    <span
+                      className={`text-[10px] font-semibold px-1 rounded border ${isGpuMode ? 'text-purple-300 bg-purple-500/15 border-purple-500/30' : 'text-amber-400 bg-amber-500/10 border-amber-500/20'}`}
+                      title={isGpuMode ? `Menggunakan ${hunter.active_workers} CUDA Grid Streams paralel pada NVIDIA GPU` : `Menggunakan ${hunter.active_workers} CPU worker threads paralel`}
+                    >
+                      ⚡ {hunter.active_workers} {isGpuMode ? 'Streams' : 'Core'}
+                    </span>
+                  )}
+                </div>
+                <div className="text-sm font-bold text-white font-mono">
+                  {hunter.keys_per_second > 0
+                    ? formatKeysSpeed(hunter.keys_per_second)
+                    : '0 k/s'}
+                </div>
+              </div>
+
+              <div className="p-2.5 bg-slate-950/50 border border-slate-800/60 rounded-xl">
+                <div className="flex items-center gap-1.5 text-slate-400 text-[11px] mb-1">
+                  <Layers className="w-3.5 h-3.5 text-blue-400" />
+                  <span>Windows (Postgres)</span>
+                </div>
+                <div className="text-sm font-bold text-white font-mono">
+                  {hunter.windows_scanned.toLocaleString()}
+                </div>
+                <div
+                  className="text-[10px] text-blue-400 font-mono mt-0.5 truncate"
+                  title={`Total Kunci: ${cardTotalHistoricalKeys.toLocaleString()} keys (${hunter.windows_scanned.toLocaleString()} window × ${cardKeysPerBlock.toLocaleString()} keys)`}
+                >
+                  ~{formatCompactKeys(cardTotalHistoricalKeys)} keys
+                </div>
+              </div>
+
+              <div className="col-span-2 p-2.5 bg-slate-950/50 border border-slate-800/60 rounded-xl">
+                <div className="flex items-center justify-between text-[11px] text-slate-400 mb-1">
+                  <div className="flex items-center gap-1.5">
+                    <Activity className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>{isGpuMode ? `Dispatch #${hunter.round}` : `Ronde ${hunter.round}`}</span>
+                  </div>
+                  <span>Sesi ini: {formatLargeNumber(hunter.total_keys_checked)}</span>
+                </div>
+                {hunter.last_window_hex && (() => {
+                  const parsed = parseWindowHexRange(hunter.last_window_hex);
+                  const progress = parsed.startHex
+                    ? calculateRangePercentage(parsed.startHex, puzzle.range_start_hex, puzzle.range_end_hex, 2)
+                    : null;
+
+                  return (
+                    <div className="mt-1 space-y-1">
+                      <div className="flex items-center justify-between text-[10px] gap-1">
+                        <span className="font-mono text-slate-400 truncate" title={hunter.last_window_hex}>
+                          {hunter.last_window_hex}
+                        </span>
+                        {progress && (
+                          <span className="font-mono text-amber-400 font-bold bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20 shrink-0">
+                            {progress.formatted}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* Action Controls */}
         <div className="pt-2 space-y-2">

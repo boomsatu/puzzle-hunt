@@ -81,13 +81,27 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
   const isRunning = hunter?.status === 'Running';
   const isPausing = hunter?.status === 'Pausing';
   const isSolved = puzzle.is_solved || hunter?.status === 'SolvedByUs' || hunter?.status === 'SolvedByOther';
+  const isGpuMode = hunter?.device_mode === 'gpu' || Boolean(hunter?.gpu_info);
 
   // Perhitungan total keys dari perkalian block / window
   const isPubkeyExposed = Boolean(puzzle.pubkey_hex && puzzle.pubkey_hex.trim().length === 66);
-  const effectiveBits = isPubkeyExposed ? windowBits : Math.min(windowBits, 18);
-  const keysPerBlock = Math.pow(2, effectiveBits);
+  // Di mode GPU, ukuran window adalah 2^30 (atau sesuai data backend hunter.window_bits)
+  const effectiveBits = hunter?.window_bits
+    ? hunter.window_bits
+    : isGpuMode
+    ? 30
+    : isPubkeyExposed
+    ? windowBits
+    : Math.min(windowBits, 18);
+  const keysPerBlock = hunter?.window_keys
+    ? hunter.window_keys
+    : Math.pow(2, effectiveBits);
   const windowsCount = hunter?.windows_scanned || windows.length;
-  const totalHistoricalKeys = windowsCount * keysPerBlock;
+  // Total historical keys: akumulasi seluruh window yang discan di database (atau minimal sesi ini jika lebih besar)
+  const totalHistoricalKeys = Math.max(
+    windowsCount * keysPerBlock,
+    hunter?.total_keys_checked || 0
+  );
 
   // Persentase keseluruhan key yang sudah diproses dari total key space puzzle
   const overallProgress = (() => {
@@ -345,12 +359,15 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
         <div className="p-4 bg-slate-900/60 border border-slate-800 rounded-2xl">
           <div className="flex items-center justify-between text-slate-400 text-xs mb-1">
             <div className="flex items-center gap-2">
-              <Zap className="w-4 h-4 text-amber-400" />
+              <Zap className={`w-4 h-4 ${isGpuMode ? 'text-purple-400 fill-purple-400/30' : 'text-amber-400'}`} />
               <span>Kecepatan Live</span>
             </div>
             {hunter?.active_workers && hunter.active_workers > 1 && (
-              <span className="text-[10px] text-amber-400 font-bold bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20" title={`Menggunakan ${hunter.active_workers} CPU worker threads paralel`}>
-                ⚡ {hunter.active_workers} Core
+              <span
+                className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${isGpuMode ? 'text-purple-300 bg-purple-500/15 border-purple-500/30' : 'text-amber-400 bg-amber-500/10 border-amber-500/20'}`}
+                title={isGpuMode ? `Menggunakan ${hunter.active_workers} CUDA Grid Streams paralel pada NVIDIA GPU` : `Menggunakan ${hunter.active_workers} CPU worker threads paralel`}
+              >
+                ⚡ {hunter.active_workers} {isGpuMode ? 'Streams' : 'Core'}
               </span>
             )}
           </div>
@@ -362,13 +379,18 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
         <div className="p-4 bg-slate-900/60 border border-slate-800 rounded-2xl">
           <div className="flex items-center gap-2 text-slate-400 text-xs mb-1">
             <Activity className="w-4 h-4 text-emerald-400" />
-            <span>Ronde Berjalan</span>
+            <span>{isGpuMode ? 'Dispatch Sesi Ini' : 'Ronde Berjalan'}</span>
           </div>
-          <div className="text-xl font-extrabold text-white font-mono">
-            #{hunter?.round || 0}
+          <div className="text-xl font-extrabold text-white font-mono flex items-center gap-2">
+            <span>#{hunter?.round || 0}</span>
+            {hunter?.active_workers && hunter.active_workers > 1 && (
+              <span className="text-[10px] text-slate-500 font-sans font-normal" title={`~${Math.round((hunter?.round || 0) / hunter.active_workers).toLocaleString()} batch ronde (${hunter.active_workers} worker/batch)`}>
+                (~{Math.round((hunter?.round || 0) / hunter.active_workers).toLocaleString()} batch)
+              </span>
+            )}
           </div>
           {hunter?.total_keys_checked ? (
-            <div className="text-[11px] text-emerald-400/70 font-mono mt-1" title={`${hunter.total_keys_checked.toLocaleString()} keys sesi ini`}>
+            <div className="text-[11px] text-emerald-400/70 font-mono mt-1" title={`${hunter.total_keys_checked.toLocaleString()} keys diperiksa pada sesi aktif ini`}>
               Sesi ini: {formatLargeNumber(hunter.total_keys_checked)} keys
             </div>
           ) : null}
@@ -386,7 +408,7 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
           </div>
           <div
             className="text-xs text-blue-400 font-mono mt-1 flex items-center gap-1.5 flex-wrap"
-            title={`Total Kunci: ${totalHistoricalKeys.toLocaleString()} / ${overallProgress ? overallProgress.totalKeySpace.toString() : '?'} (${windowsCount.toLocaleString()} window × 2^${effectiveBits} keys)`}
+            title={`Total Kunci: ${totalHistoricalKeys.toLocaleString()} / ${overallProgress ? overallProgress.totalKeySpace.toString() : '?'} (${windowsCount.toLocaleString()} window × ${keysPerBlock.toLocaleString()} keys)`}
           >
             <span className="text-slate-400 text-[11px]">Total Kunci:</span>
             <span className="font-bold">~{formatCompactKeys(totalHistoricalKeys)}</span>
@@ -606,7 +628,7 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
                   <div>
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-extrabold text-sm text-white tracking-wide">
-                        {gpuInfo?.name || 'NVIDIA RTX 6000 Ada Generation'}
+                        {gpuInfo?.name || 'NVIDIA RTX PRO 6000 Blackwell Server Edition'}
                       </span>
                       <span className="px-2 py-0.5 bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 text-[10px] font-bold rounded-full flex items-center gap-1">
                         <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></span>
@@ -614,11 +636,11 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
                       </span>
                     </div>
                     <div className="flex items-center gap-2 text-[11px] text-slate-400 mt-0.5 flex-wrap">
-                      <span>Arsitektur: <strong className="text-purple-300 font-mono">{(gpuInfo?.cuda_cores || 18176).toLocaleString()} CUDA Cores</strong> ({gpuInfo?.sm_count || 142} SMs)</span>
+                      <span>Arsitektur: <strong className="text-purple-300 font-mono">{(gpuInfo?.cuda_cores || 24064).toLocaleString()} CUDA Cores</strong> ({gpuInfo?.sm_count || 188} SMs)</span>
                       <span>•</span>
-                      <span>VRAM: <strong className="text-cyan-300 font-mono">{Math.round((gpuInfo?.total_memory_mb || 49140) / 1024)} GB GDDR6</strong></span>
+                      <span>VRAM: <strong className="text-cyan-300 font-mono">{Math.round((gpuInfo?.total_memory_mb || 98304) / 1024)} GB GDDR7</strong></span>
                       <span>•</span>
-                      <span>Driver: <strong className="text-slate-300 font-mono">{gpuInfo?.driver_version || '550.54'}</strong></span>
+                      <span>Driver: <strong className="text-slate-300 font-mono">{gpuInfo?.driver_version || '595.71'}</strong></span>
                     </div>
                   </div>
                 </div>

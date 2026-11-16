@@ -145,8 +145,10 @@ pub fn find_cuda_solver_binary() -> Option<String> {
         "keyhunt.exe",
         "bitcrack",
         "bitcrack.exe",
-        "./cuda/kangaroo",
         "./bin/kangaroo",
+        "/workspace/puzzle-hunt/bin/kangaroo",
+        "/usr/local/bin/kangaroo",
+        "./cuda/kangaroo",
     ];
 
     for name in candidates {
@@ -182,30 +184,62 @@ pub fn run_cuda_solver(
     };
 
     let t_start = std::time::Instant::now();
-
-    // Jalankan solver dengan argumen standar CLI
-    let range_arg = format!("{}:{}", start_hex, end_hex);
+    let lower_bin = solver_bin.to_lowercase();
+    let mut temp_cfg: Option<String> = None;
     let mut cmd = Command::new(solver_bin);
-    cmd.args(["-gpu", "-d", &dp_bits.to_string(), &pub_hex, &range_arg]);
 
-    if let Ok(output) = cmd.output() {
+    if lower_bin.contains("kangaroo") {
+        // JeanLucPons Kangaroo format config file:
+        // Baris 1: start_hex
+        // Baris 2: end_hex
+        // Baris 3: pubkey_hex
+        let unique_id = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let tmp_path = format!("/tmp/k_cfg_{}_{}.txt", std::process::id(), unique_id);
+        let cfg_content = format!("{}\n{}\n{}\n", start_hex, end_hex, pub_hex);
+        if std::fs::write(&tmp_path, cfg_content).is_ok() {
+            temp_cfg = Some(tmp_path.clone());
+            cmd.args(["-t", "0", "-gpu", "-d", &dp_bits.to_string(), &tmp_path]);
+        } else {
+            let range_arg = format!("{}:{}", start_hex, end_hex);
+            cmd.args(["-gpu", "-d", &dp_bits.to_string(), &pub_hex, &range_arg]);
+        }
+    } else if lower_bin.contains("bitcrack") {
+        let range_arg = format!("{}:{}", start_hex, end_hex);
+        cmd.args(["-b", "188", "-t", "256", "-p", "256", "--keyspace", &range_arg, &pub_hex]);
+    } else {
+        let range_arg = format!("{}:{}", start_hex, end_hex);
+        cmd.args(["-gpu", "-d", &dp_bits.to_string(), &pub_hex, &range_arg]);
+    }
+
+    let result = if let Ok(output) = cmd.output() {
         let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut hit = None;
         for line in stdout.lines() {
-            if line.contains("Key#") || line.contains("PRIVKEY:") || line.contains("Found:") {
+            if line.contains("Key#") || line.contains("PRIVKEY:") || line.contains("Found:") || line.contains("Priv:") {
                 for word in line.split_whitespace() {
                     let clean = word.trim().trim_start_matches("0x");
                     if clean.len() == 64 {
                         if let Some(key) = BigUint::parse_bytes(clean.as_bytes(), 16) {
-                            return Some(KangarooResult::hit(key, 1_000_000_000, t_start.elapsed().as_secs_f64()));
+                            hit = Some(KangarooResult::hit(key, 1_073_741_824, t_start.elapsed().as_secs_f64()));
+                            break;
                         }
                     }
                 }
             }
         }
-        return Some(KangarooResult::miss(1_000_000_000, t_start.elapsed().as_secs_f64()));
+        hit.or_else(|| Some(KangarooResult::miss(1_073_741_824, t_start.elapsed().as_secs_f64())))
+    } else {
+        None
+    };
+
+    if let Some(ref path) = temp_cfg {
+        let _ = std::fs::remove_file(path);
     }
 
-    None
+    result
 }
 
 /// Inisialisasi dan verifikasi status CUDA saat aplikasi startup

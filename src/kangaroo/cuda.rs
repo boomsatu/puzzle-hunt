@@ -162,17 +162,21 @@ pub fn get_telemetry(streams: usize) -> GpuTelemetry {
 /// Menemukan executable solver CUDA untuk Public Key (JeanLucPons Kangaroo)
 pub fn find_cuda_solver_binary() -> Option<String> {
     let candidates = [
+        "bin/kangaroo",
+        "./bin/kangaroo",
+        "/workspace/puzzle-hunt/bin/kangaroo",
         "kangaroo-cuda",
         "kangaroo-cuda.exe",
         "kangaroo",
         "kangaroo.exe",
-        "./bin/kangaroo",
-        "/workspace/puzzle-hunt/bin/kangaroo",
         "/usr/local/bin/kangaroo",
         "./cuda/kangaroo",
     ];
 
     for name in candidates {
+        if std::path::Path::new(name).is_file() {
+            return Some(name.to_string());
+        }
         if let Ok(out) = Command::new(name).arg("-h").output() {
             if out.status.success() || !out.stdout.is_empty() || !out.stderr.is_empty() {
                 return Some(name.to_string());
@@ -186,23 +190,29 @@ pub fn find_cuda_solver_binary() -> Option<String> {
 /// Menemukan executable solver CUDA khusus untuk Address tanpa pubkey (cuBitCrack / BitCrack / KeyHunt)
 pub fn find_cuda_address_solver() -> Option<String> {
     let candidates = [
-        "cuBitCrack",
-        "cuBitCrack.exe",
-        "bitcrack",
-        "bitcrack.exe",
+        "bin/cuBitCrack",
         "./bin/cuBitCrack",
         "/workspace/puzzle-hunt/bin/cuBitCrack",
+        "cuBitCrack",
+        "cuBitCrack.exe",
+        "bin/bitcrack",
         "./bin/bitcrack",
         "/workspace/puzzle-hunt/bin/bitcrack",
+        "bitcrack",
+        "bitcrack.exe",
         "/usr/local/bin/cuBitCrack",
         "/usr/local/bin/bitcrack",
-        "keyhunt",
-        "keyhunt.exe",
+        "bin/keyhunt",
         "./bin/keyhunt",
         "/workspace/puzzle-hunt/bin/keyhunt",
+        "keyhunt",
+        "keyhunt.exe",
     ];
 
     for name in candidates {
+        if std::path::Path::new(name).is_file() {
+            return Some(name.to_string());
+        }
         if let Ok(out) = Command::new(name).arg("-h").output() {
             if out.status.success() || !out.stdout.is_empty() || !out.stderr.is_empty() {
                 return Some(name.to_string());

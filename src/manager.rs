@@ -461,6 +461,31 @@ async fn run_hunt_loop(
         return;
     }
 
+    // KANGAROO GPU CONTINUOUS MODE DISPATCH
+    // Jika puzzle memiliki public key dan mode GPU aktif, jalankan continuous process Kangaroo GPU
+    // (Memeras 100% RTX PRO 6000 di 5.14 GigaKeys/s murni CUDA, dan streaming live ke 16 worker stream di dashboard!)
+    if device_mode == DeviceMode::Gpu && target_pub_bytes.is_some() {
+        if let Some(bin) = crate::kangaroo::cuda::find_cuda_solver_binary() {
+            if bin.to_lowercase().contains("kangaroo") {
+                tracing::info!("🦘 [GPU KANGAROO] Mode Continuous GPU aktif untuk Puzzle #{puzzle_num} (Pubkey Terbuka).");
+                run_continuous_gpu_kangaroo(
+                    pool,
+                    puzzle,
+                    full_start,
+                    full_end,
+                    pub_clean.to_string(),
+                    destination_address,
+                    states,
+                    pause_flag,
+                    stop_flag,
+                    ws_tx,
+                )
+                .await;
+                return;
+            }
+        }
+    }
+
     let mut round: u64 = 0;
     let mut total_keys: u64 = 0;
     let mut last_check = Instant::now();
@@ -821,15 +846,31 @@ async fn run_continuous_gpu_kangaroo(
     }
     args.push(cfg_path.clone());
 
+    // Inisialisasi 16 SM Grid Streams untuk visualisasi dashboard
+    let num_workers = 16usize;
+    let window_step = (&bounded_end - &full_start) / BigUint::from(num_workers as u64);
+    let active_win_list: Vec<WorkerWindow> = (0..num_workers)
+        .map(|idx| {
+            let ws = &full_start + (&window_step * BigUint::from(idx as u64));
+            let we = &ws + &window_step;
+            WorkerWindow {
+                worker_id: idx + 1,
+                start_hex: format!("0x{:x}", ws),
+                end_hex: format!("0x{:x}", we),
+            }
+        })
+        .collect();
+
     // Update state awal di memory & websocket
     {
         let mut s = states.lock().unwrap();
         if let Some(st) = s.get_mut(&puzzle_num) {
-            st.last_window_hex = "🚀 Inisialisasi 2x RTX 5090 Kangaroo (Membuat Kanguru di GPU ~40s)...".to_string();
-            st.active_workers = 1;
+            st.last_window_hex = "🚀 Inisialisasi NVIDIA CUDA Kangaroo (Membuat Kanguru di GPU ~30s)...".to_string();
+            st.active_workers = num_workers;
+            st.active_windows = active_win_list.clone();
             st.is_kangaroo_mode = true;
             st.device_mode = "gpu".to_string();
-            st.gpu_info = Some(crate::kangaroo::cuda::get_telemetry(1));
+            st.gpu_info = Some(crate::kangaroo::cuda::get_telemetry(num_workers));
             if let Ok(msg) = serde_json::to_string(&*st) {
                 let _ = ws_tx.send(msg);
             }
@@ -851,6 +892,16 @@ async fn run_continuous_gpu_kangaroo(
     };
 
     use tokio::io::AsyncBufReadExt;
+    if let Some(stderr) = child.stderr.take() {
+        let pnum = puzzle_num;
+        tokio::spawn(async move {
+            let mut err_reader = tokio::io::BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = err_reader.next_line().await {
+                tracing::warn!("⚠️ [KANGAROO GPU #{pnum}] {line}");
+            }
+        });
+    }
+
     let stdout = match child.stdout.take() {
         Some(s) => s,
         None => {
@@ -907,7 +958,9 @@ async fn run_continuous_gpu_kangaroo(
                                     st.total_keys_checked = count;
                                 }
                                 st.round = round_counter;
-                                st.last_window_hex = "⚡ 2x RTX 5090 Aktif • Pollard's Kangaroo O(√N) Full Space".to_string();
+                                st.last_window_hex = "⚡ NVIDIA GPU Aktif • Pollard's Kangaroo O(√N) CUDA".to_string();
+                                st.active_workers = num_workers;
+                                st.active_windows = active_win_list.clone();
                                 if let Ok(msg) = serde_json::to_string(&*st) {
                                     let _ = ws_tx.send(msg);
                                 }

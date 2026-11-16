@@ -158,21 +158,47 @@ pub fn get_telemetry(streams: usize) -> GpuTelemetry {
     }
 }
 
-/// Menemukan executable solver CUDA yang tersedia di PATH atau direktori proyek
+/// Menemukan executable solver CUDA untuk Public Key (JeanLucPons Kangaroo)
 pub fn find_cuda_solver_binary() -> Option<String> {
     let candidates = [
         "kangaroo-cuda",
         "kangaroo-cuda.exe",
         "kangaroo",
         "kangaroo.exe",
-        "keyhunt",
-        "keyhunt.exe",
-        "bitcrack",
-        "bitcrack.exe",
         "./bin/kangaroo",
         "/workspace/puzzle-hunt/bin/kangaroo",
         "/usr/local/bin/kangaroo",
         "./cuda/kangaroo",
+    ];
+
+    for name in candidates {
+        if let Ok(out) = Command::new(name).arg("-h").output() {
+            if out.status.success() || !out.stdout.is_empty() || !out.stderr.is_empty() {
+                return Some(name.to_string());
+            }
+        }
+    }
+
+    None
+}
+
+/// Menemukan executable solver CUDA khusus untuk Address tanpa pubkey (cuBitCrack / BitCrack / KeyHunt)
+pub fn find_cuda_address_solver() -> Option<String> {
+    let candidates = [
+        "cuBitCrack",
+        "cuBitCrack.exe",
+        "bitcrack",
+        "bitcrack.exe",
+        "./bin/cuBitCrack",
+        "/workspace/puzzle-hunt/bin/cuBitCrack",
+        "./bin/bitcrack",
+        "/workspace/puzzle-hunt/bin/bitcrack",
+        "/usr/local/bin/cuBitCrack",
+        "/usr/local/bin/bitcrack",
+        "keyhunt",
+        "keyhunt.exe",
+        "./bin/keyhunt",
+        "/workspace/puzzle-hunt/bin/keyhunt",
     ];
 
     for name in candidates {
@@ -277,9 +303,10 @@ pub fn init_cuda_status() -> (bool, String) {
         info!("🚀 [CUDA ENGINE] {msg}");
 
         if let Some(bin) = find_cuda_solver_binary() {
-            info!("⚡ [CUDA SOLVER] Ditemukan accelerator binary: {bin}");
-        } else {
-            info!("ℹ️ [CUDA PIPELINE] Menggunakan 16-Stream Multi-Grid GPU dispatch pipeline.");
+            info!("⚡ [CUDA SOLVER] Ditemukan accelerator Kangaroo (Pubkey): {bin}");
+        }
+        if let Some(addr_bin) = find_cuda_address_solver() {
+            info!("⚡ [CUDA SOLVER] Ditemukan accelerator Address Scanner (GPU): {addr_bin}");
         }
 
         (true, msg)

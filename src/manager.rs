@@ -486,6 +486,30 @@ async fn run_hunt_loop(
         }
     }
 
+    // ADDRESS SCANNER GPU CONTINUOUS DISPATCH (cuBitCrack / BitCrack)
+    // Jika puzzle TIDAK memiliki public key (hanya Address/Hash160 seperti Puzzle #71),
+    // jalankan cuBitCrack langsung pada GPU agar RTX 6000 membakar 100% CUDA cores di 3+ GigaKeys/s!
+    if device_mode == DeviceMode::Gpu && target_pub_bytes.is_none() {
+        if let Some(bin) = crate::kangaroo::cuda::find_cuda_address_solver() {
+            tracing::info!("⚡ [GPU BITCRACK] Mode Continuous GPU Address Scanner ({bin}) aktif untuk Puzzle #{puzzle_num} (Address: {}).", puzzle.address);
+            run_continuous_gpu_bitcrack(
+                pool,
+                puzzle,
+                full_start,
+                full_end,
+                destination_address,
+                states,
+                pause_flag,
+                stop_flag,
+                ws_tx,
+            )
+            .await;
+            return;
+        } else {
+            tracing::warn!("ℹ️ [GPU INFO] cuBitCrack / bitcrack belum terpasang di bin/. Puzzle #{puzzle_num} berjalan di CPU. Pasang cuBitCrack agar puzzle address juga berjalan di GPU!");
+        }
+    }
+
     let mut round: u64 = 0;
     let mut total_keys: u64 = 0;
     let mut last_check = Instant::now();
@@ -965,6 +989,186 @@ async fn run_continuous_gpu_kangaroo(
             &ws_tx,
         ).await;
     }
+}
+
+/// Menjalankan cuBitCrack / BitCrack sebagai continuous GPU process untuk puzzle yang TIDAK memiliki public key (Address Scanner)
+async fn run_continuous_gpu_bitcrack(
+    pool: PgPool,
+    puzzle: Puzzle,
+    full_start: BigUint,
+    full_end: BigUint,
+    destination_address: String,
+    states: Arc<Mutex<HashMap<i32, HunterState>>>,
+    pause_flag: Arc<AtomicBool>,
+    stop_flag: Arc<AtomicBool>,
+    ws_tx: tokio::sync::broadcast::Sender<String>,
+) {
+    let puzzle_num = puzzle.puzzle_number;
+    let _ = std::fs::create_dir_all("data");
+    let out_path = format!("data/FOUND_{puzzle_num}.txt");
+
+    let start_hex = format!("{:x}", full_start);
+    let end_hex = format!("{:x}", full_end);
+    let range_arg = format!("{start_hex}:{end_hex}");
+
+    let bin = crate::kangaroo::cuda::find_cuda_address_solver()
+        .unwrap_or_else(|| "cuBitCrack".to_string());
+
+    let args = vec![
+        "-d".to_string(), "0".to_string(),
+        "-b".to_string(), "188".to_string(),
+        "-t".to_string(), "256".to_string(),
+        "-p".to_string(), "256".to_string(),
+        "--keyspace".to_string(), range_arg,
+        "-o".to_string(), out_path.clone(),
+        puzzle.address.clone(),
+    ];
+
+    // Update state awal di memory & websocket
+    {
+        let mut s = states.lock().unwrap();
+        if let Some(st) = s.get_mut(&puzzle_num) {
+            st.last_window_hex = "🚀 GPU CUDA Address Scanner Aktif (cuBitCrack)...".to_string();
+            st.active_workers = 1;
+            st.is_kangaroo_mode = false;
+            st.device_mode = "gpu".to_string();
+            st.gpu_info = Some(crate::kangaroo::cuda::get_telemetry(1));
+            if let Ok(msg) = serde_json::to_string(&*st) {
+                let _ = ws_tx.send(msg);
+            }
+        }
+    }
+
+    let mut child = match tokio::process::Command::new(&bin)
+        .args(&args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("Gagal menjalankan BitCrack binary: {e}");
+            update_status(&states, puzzle_num, HunterStatus::Error(format!("Gagal execute bitcrack: {e}")));
+            return;
+        }
+    };
+
+    use tokio::io::AsyncBufReadExt;
+    let stdout = match child.stdout.take() {
+        Some(s) => s,
+        None => {
+            tracing::error!("Gagal mengambil child stdout");
+            return;
+        }
+    };
+    let mut reader = tokio::io::BufReader::new(stdout).lines();
+
+    let mut found_priv_hex: Option<String> = None;
+    let mut round_counter: u64 = 0;
+
+    loop {
+        tokio::select! {
+            _ = tokio::time::sleep(tokio::time::Duration::from_millis(500)) => {
+                if pause_flag.load(Ordering::Relaxed) || stop_flag.load(Ordering::Relaxed) {
+                    tracing::info!("⏸️ [BITCRACK PAUSE] Menjeda hunter GPU BitCrack puzzle #{puzzle_num}...");
+                    let _ = child.kill().await;
+                    update_status(&states, puzzle_num, HunterStatus::Paused);
+                    if let Some(st) = states.lock().unwrap().get(&puzzle_num) {
+                        if let Ok(msg) = serde_json::to_string(st) {
+                            let _ = ws_tx.send(msg);
+                        }
+                    }
+                    break;
+                }
+
+                if let Ok(content) = std::fs::read_to_string(&out_path) {
+                    if let Some(k) = extract_key_from_text(&content) {
+                        found_priv_hex = Some(k);
+                        let _ = child.kill().await;
+                        break;
+                    }
+                }
+            }
+            line_res = reader.next_line() => {
+                match line_res {
+                    Ok(Some(l)) => {
+                        if l.contains("Speed:") || l.contains("MKey/s") || l.contains("GKey/s") || l.contains("MK/s") {
+                            round_counter += 1;
+                            let parsed_kps = parse_bitcrack_speed(&l);
+                            let parsed_count = parse_bitcrack_count(&l);
+
+                            let mut s = states.lock().unwrap();
+                            if let Some(st) = s.get_mut(&puzzle_num) {
+                                if let Some(kps) = parsed_kps {
+                                    st.keys_per_second = kps;
+                                }
+                                if let Some(count) = parsed_count {
+                                    st.total_keys_checked = count;
+                                }
+                                st.round = round_counter;
+                                st.last_window_hex = "⚡ NVIDIA GPU Aktif • cuBitCrack Address Scanner (Cuda Cores)".to_string();
+                                if let Ok(msg) = serde_json::to_string(&*st) {
+                                    let _ = ws_tx.send(msg);
+                                }
+                            }
+                        }
+
+                        if l.contains("Priv:") || l.contains("Address:") || l.contains("Found:") || l.contains("Key#") {
+                            if let Some(k) = extract_key_from_text(&l) {
+                                found_priv_hex = Some(k);
+                                let _ = child.kill().await;
+                                break;
+                            }
+                        }
+                    }
+                    Ok(None) => break,
+                    Err(_) => break,
+                }
+            }
+        }
+    }
+
+    if let Some(priv_hex) = found_priv_hex {
+        handle_key_found(
+            &pool,
+            &puzzle,
+            &priv_hex,
+            &destination_address,
+            &states,
+            &ws_tx,
+        ).await;
+    }
+}
+
+fn parse_bitcrack_speed(line: &str) -> Option<f64> {
+    if let Some(idx) = line.find("Speed:") {
+        let sub = &line[idx + 6..];
+        let parts: Vec<&str> = sub.split_whitespace().collect();
+        if parts.len() >= 2 {
+            let val: f64 = parts[0].trim().trim_matches(|c| c == '[' || c == ']').parse().ok()?;
+            let unit = parts[1];
+            if unit.starts_with('G') {
+                return Some(val * 1_000_000_000.0);
+            } else if unit.starts_with('M') {
+                return Some(val * 1_000_000.0);
+            } else if unit.starts_with('K') {
+                return Some(val * 1_000.0);
+            } else {
+                return Some(val);
+            }
+        }
+    }
+    None
+}
+
+fn parse_bitcrack_count(line: &str) -> Option<u64> {
+    if let Some(idx) = line.find("Total:") {
+        let sub = &line[idx + 6..];
+        let end = sub.find(']').unwrap_or_else(|| sub.find(' ').unwrap_or(sub.len()));
+        let chunk = sub[..end].trim();
+        return chunk.parse::<u64>().ok();
+    }
+    None
 }
 
 async fn handle_key_found(

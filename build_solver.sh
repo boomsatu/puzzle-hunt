@@ -60,11 +60,12 @@ rm -rf "$BUILD_DIR"
 git clone --depth 1 https://github.com/JeanLucPons/Kangaroo.git "$BUILD_DIR"
 cd "$BUILD_DIR"
 
-# 4. Patch compatibility untuk GCC 13/14 & C++ standard library (<cstdint>)
-echo -e "\n${CYAN}[4/5] Menerapkan patch compatibility GCC 13/14 (<cstdint>)...${NC}"
+# 4. Patch compatibility untuk GCC 13/14 & CUDA 12/13
+echo -e "\n${CYAN}[4/5] Menerapkan patch compatibility GCC 13/14 & CUDA 12/13...${NC}"
 python3 -c "
 import os, glob
 
+# 4a. Tambahkan #include <cstdint> dan <stdint.h> ke seluruh headers & C++ source
 patterns = ['**/*.h', '**/*.hpp', '**/*.cpp', '**/*.cu']
 files = []
 for p in patterns:
@@ -81,6 +82,25 @@ for filepath in files:
                 f.write(new_content)
             patched += 1
 print(f'   ✅ Berhasil mem-patch {patched} source files dengan <cstdint>')
+
+# 4b. Perbaiki API usang/dihapus di CUDA 12/13 pada GPU/GPUEngine.cu
+gpu_cu = 'GPU/GPUEngine.cu'
+if os.path.isfile(gpu_cu):
+    with open(gpu_cu, 'r', encoding='utf-8', errors='ignore') as f:
+        cu_content = f.read()
+
+    # computeMode dihapus di struct cudaDeviceProp pada CUDA 12 & 13
+    cu_content = cu_content.replace('deviceProp.computeMode', '0')
+
+    # cudaThreadSynchronize() diganti dengan cudaDeviceSynchronize()
+    cu_content = cu_content.replace('cudaThreadSynchronize()', 'cudaDeviceSynchronize()')
+
+    # Return default 128 cores/SM untuk arsitektur modern (Ampere, Ada, Hopper, Blackwell)
+    cu_content = cu_content.replace('return 0;\n\n}', 'return 128;\n\n}')
+
+    with open(gpu_cu, 'w', encoding='utf-8') as f:
+        f.write(cu_content)
+    print('   ✅ Berhasil mem-patch GPU/GPUEngine.cu untuk CUDA 12/13 (computeMode & core count)')
 "
 
 # 5. Deteksi Compute Capability GPU & Konfigurasi Makefile

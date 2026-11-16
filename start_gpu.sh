@@ -1,9 +1,14 @@
-﻿#!/usr/bin/env bash
+﻿#!/bin/bash
 # ==============================================================================
 #   BITCOIN PUZZLE HUNTER â€” GPU INSTANCE QUICK START (BACKEND ONLY)
 #   Usage: bash start_gpu.sh
 # ==============================================================================
 set -e
+
+# Muat environment Cargo / Rustup agar selalu terbaca di subshell
+[ -f "$HOME/.cargo/env" ] && source "$HOME/.cargo/env" 2>/dev/null || true
+[ -f "/root/.cargo/env" ] && source "/root/.cargo/env" 2>/dev/null || true
+export PATH="$HOME/.cargo/bin:/root/.cargo/bin:$PATH"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
@@ -38,10 +43,18 @@ else
     echo -e "${GREEN}âœ… PostgreSQL (Native) siap & running.${NC}"
 fi
 
-# 3. Check Binary
+# 3. Check & Build Binary
 echo -e "\n${CYAN}[2/3] Memeriksa & Mengompilasi Binary Backend...${NC}"
-cargo build --release --bin puzzle-hunt
-echo -e "${GREEN}âœ… Binary siap: target/release/puzzle-hunt${NC}"
+if command -v cargo &>/dev/null; then
+    echo "ðŸ¦€ Mengompilasi versi release terbaru dengan cargo..."
+    cargo build --release --bin puzzle-hunt
+    echo -e "${GREEN}âœ… Binary siap: target/release/puzzle-hunt${NC}"
+elif [ -f "target/release/puzzle-hunt" ]; then
+    echo -e "${GREEN}âœ… Menggunakan binary rilis yang sudah ada: target/release/puzzle-hunt${NC}"
+else
+    echo -e "${RED}âŒ Error: 'cargo' tidak ditemukan dan target/release/puzzle-hunt belum ada.${NC}"
+    exit 1
+fi
 
 # 4. Launch Backend
 PUBLIC_IP=$(curl -s https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')
@@ -59,7 +72,7 @@ echo -e "${YELLOW}ðŸ’¡ Tip: Sambungkan Vercel dengan menyetel VITE_API_URL=
 # Default mode: DAEMON BACKGROUND (otomatis aman tutup SSH)
 if [ "$1" != "--fg" ] && [ "$1" != "--foreground" ]; then
     mkdir -p logs
-    # Bunuh backend lama dan semua proses solver kangaroo/bitcrack yang tersisa/zombie
+    # Bunuh backend lama dan semua proses solver GPU yang tersisa/zombie
     pkill -9 -f kangaroo 2>/dev/null || true
     pkill -9 -f cuBitCrack 2>/dev/null || true
     pkill -9 -f bitcrack 2>/dev/null || true

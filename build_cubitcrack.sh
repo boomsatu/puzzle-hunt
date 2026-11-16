@@ -46,7 +46,7 @@ elif nvcc --help 2>&1 | grep -q "compute_90"; then
     COMPUTE_CAP="90"
 fi
 
-echo "âš™ï¸ Mengompilasi cuBitCrack dengan COMPUTE_CAP=${COMPUTE_CAP}..."
+echo "âš™ï¸ Mengompilasi cuBitCrack dengan COMPUTE_CAP=${COMPUTE_CAP} dan PTX JIT support..."
 make clean || true
 make BUILD_CUDA=1 COMPUTE_CAP=${COMPUTE_CAP} -j$(nproc)
 

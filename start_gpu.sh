@@ -1,6 +1,6 @@
-#!/usr/bin/env bash
+﻿#!/usr/bin/env bash
 # ==============================================================================
-#   BITCOIN PUZZLE HUNTER — GPU INSTANCE QUICK START (BACKEND ONLY)
+#   BITCOIN PUZZLE HUNTER â€” GPU INSTANCE QUICK START (BACKEND ONLY)
 #   Usage: bash start_gpu.sh
 # ==============================================================================
 set -e
@@ -12,9 +12,9 @@ PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$PROJECT_DIR"
 
 echo -e "${CYAN}${BOLD}"
-echo "╔══════════════════════════════════════════════════════════════════════╗"
-echo "║   🚀  PUZZLE HUNTER — START BACKEND GPU HOSTING                      ║"
-echo "╚══════════════════════════════════════════════════════════════════════╝"
+echo "â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—"
+echo "â•‘   ðŸš€  PUZZLE HUNTER â€” START BACKEND GPU HOSTING                      â•‘"
+echo "â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•"
 echo -e "${NC}"
 
 # 1. Check GPU Hardware
@@ -28,23 +28,20 @@ if command -v docker &>/dev/null && docker ps &>/dev/null; then
     docker compose up -d postgres
     sleep 3
     if docker exec puzzle_postgres pg_isready -U postgres -d puzzle_hunt &>/dev/null; then
-        echo -e "${GREEN}✅ PostgreSQL (Docker) siap & running.${NC}"
+        echo -e "${GREEN}âœ… PostgreSQL (Docker) siap & running.${NC}"
     else
-        echo -e "${RED}❌ PostgreSQL belum siap. Cek log: docker logs puzzle_postgres${NC}"
+        echo -e "${RED}âŒ PostgreSQL belum siap. Cek log: docker logs puzzle_postgres${NC}"
         exit 1
     fi
 else
     service postgresql start 2>/dev/null || true
-    echo -e "${GREEN}✅ PostgreSQL (Native) siap & running.${NC}"
+    echo -e "${GREEN}âœ… PostgreSQL (Native) siap & running.${NC}"
 fi
 
 # 3. Check Binary
-echo -e "\n${CYAN}[2/3] Memeriksa Binary Backend...${NC}"
-if [ ! -f "target/release/puzzle-hunt" ]; then
-    echo "🦀 Binary tidak ditemukan, mengompilasi release..."
-    cargo build --release --bin puzzle-hunt
-fi
-echo -e "${GREEN}✅ Binary siap: target/release/puzzle-hunt${NC}"
+echo -e "\n${CYAN}[2/3] Memeriksa & Mengompilasi Binary Backend...${NC}"
+cargo build --release --bin puzzle-hunt
+echo -e "${GREEN}âœ… Binary siap: target/release/puzzle-hunt${NC}"
 
 # 4. Launch Backend
 PUBLIC_IP=$(curl -s https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')
@@ -57,31 +54,34 @@ echo "   API Base URL : http://$PUBLIC_IP:$PORT"
 echo "   WebSocket    : ws://$PUBLIC_IP:$PORT/api/ws"
 echo "   Frontend     : Hosted on Vercel"
 echo -e "${NC}"
-echo -e "${YELLOW}💡 Tip: Sambungkan Vercel dengan menyetel VITE_API_URL=http://$PUBLIC_IP:$PORT${NC}"
+echo -e "${YELLOW}ðŸ’¡ Tip: Sambungkan Vercel dengan menyetel VITE_API_URL=http://$PUBLIC_IP:$PORT${NC}"
 
-if [ "$1" == "--daemon" ] || [ "$1" == "-d" ]; then
+# Default mode: DAEMON BACKGROUND (otomatis aman tutup SSH)
+if [ "$1" != "--fg" ] && [ "$1" != "--foreground" ]; then
     mkdir -p logs
-    # Bunuh backend lama dan semua proses solver kangaroo yang tersisa/zombie
+    # Bunuh backend lama dan semua proses solver kangaroo/bitcrack yang tersisa/zombie
     pkill -9 -f kangaroo 2>/dev/null || true
+    pkill -9 -f cuBitCrack 2>/dev/null || true
+    pkill -9 -f bitcrack 2>/dev/null || true
     pkill -9 -f puzzle-hunt 2>/dev/null || true
+    fuser -k $PORT/tcp 2>/dev/null || true
     sleep 1
     nohup ./target/release/puzzle-hunt > logs/backend.log 2>&1 &
     PID=$!
     echo "$PID" > .backend.pid
-    echo -e "${GREEN}✅ Backend berjalan aman di BACKGROUND (PID: $PID).${NC}"
-    echo -e "${GREEN}🔒 Anda AMAN untuk menutup terminal SSH atau mematikan laptop sekarang!${NC}"
+    echo -e "${GREEN}âœ… Backend berjalan aman di BACKGROUND DAEMON (PID: $PID).${NC}"
+    echo -e "${GREEN}ðŸ”’ Anda AMAN untuk menutup terminal SSH atau mematikan laptop sekarang!${NC}"
     echo -e "${CYAN}   - Pantau log live : tail -f logs/backend.log${NC}"
     echo -e "${CYAN}   - Hentikan        : bash stop.sh (atau kill $PID)${NC}"
 else
-    # Bersihkan solver kangaroo sebelum menjalankan foreground
+    # Bersihkan solver GPU sebelum menjalankan foreground
     pkill -9 -f kangaroo 2>/dev/null || true
+    pkill -9 -f cuBitCrack 2>/dev/null || true
+    pkill -9 -f bitcrack 2>/dev/null || true
     pkill -9 -f puzzle-hunt 2>/dev/null || true
+    fuser -k $PORT/tcp 2>/dev/null || true
     sleep 1
-    echo -e "${YELLOW}⚠️  PERHATIAN: Saat ini berjalan di FOREGROUND (jika terminal SSH ditutup, backend akan BERHENTI).${NC}"
-    echo -e "${YELLOW}   Agar aman menutup terminal & jalan 24 jam nonstop di background, gunakan:${NC}"
-    echo -e "   👉 ${GREEN}bash start_gpu.sh --daemon${NC}  (atau gunakan ${GREEN}tmux${NC})"
-    echo -e "${YELLOW}📝 Log output real-time (Ctrl+C untuk pause/stop):${NC}"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
+    echo -e "${YELLOW}âš ï¸  PERHATIAN: Berjalan di FOREGROUND (Ctrl+C untuk pause/stop).${NC}"
+    echo "â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”"
     RUST_LOG=info ./target/release/puzzle-hunt
 fi

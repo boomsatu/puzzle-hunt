@@ -609,17 +609,22 @@ async fn run_hunt_loop(
             tokio::task::spawn_blocking(move || {
                 if mode == DeviceMode::Gpu {
                     if let Some(bin) = crate::kangaroo::cuda::find_cuda_solver_binary() {
-                        if let Some(res) = crate::kangaroo::cuda::run_cuda_solver(
-                            &bin,
-                            target_pub.as_ref(),
-                            target_h160.as_ref(),
-                            &ws_clone,
-                            &we_clone,
-                            dp_bits,
-                            assigned_gpu,
-                            stop_inner.clone(),
-                        ) {
-                            return (win_id, ws_clone, we_clone, res);
+                        let is_kangaroo = bin.to_lowercase().contains("kangaroo");
+                        // Kangaroo HANYA bisa berjalan jika pubkey target tersedia.
+                        // Jika puzzle belum ada pubkey (seperti Puzzle #71), lewati ke address scanner.
+                        if !is_kangaroo || target_pub.is_some() {
+                            if let Some(res) = crate::kangaroo::cuda::run_cuda_solver(
+                                &bin,
+                                target_pub.as_ref(),
+                                target_h160.as_ref(),
+                                &ws_clone,
+                                &we_clone,
+                                dp_bits,
+                                assigned_gpu,
+                                stop_inner.clone(),
+                            ) {
+                                return (win_id, ws_clone, we_clone, res);
+                            }
                         }
                     } else {
                         tracing::warn!("⚠️ [GPU FALLBACK] CUDA solver binary tidak ditemukan! Fallback ke Rust CPU engine — window besar akan sangat lambat.");

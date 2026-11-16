@@ -226,6 +226,12 @@ pub fn run_cuda_solver(
     };
 
     if lower_bin.contains("kangaroo") {
+        // Kangaroo HANYA bisa berjalan jika public key target tersedia!
+        // Jika puzzle belum ada pubkey (seperti Puzzle #71), lewati Kangaroo agar tidak buang waktu/error.
+        if target_pub.is_none() {
+            return None;
+        }
+
         // JeanLucPons Kangaroo format config file:
         // Baris 1: start_hex
         // Baris 2: end_hex
@@ -238,10 +244,11 @@ pub fn run_cuda_solver(
         let cfg_content = format!("{}\n{}\n{}\n", start_hex, end_hex, pub_hex);
         if std::fs::write(&tmp_path, cfg_content).is_ok() {
             temp_cfg = Some(tmp_path.clone());
-            cmd.args(["-t", "0", "-gpu", "-gpuId", &gpu_id_str, "-d", &dp_bits.to_string(), &tmp_path]);
+            // Gunakan -m 1.5 agar Kangaroo berhenti setelah batas langkah jika window ini tidak memiliki collision (tidak infinite loop)
+            cmd.args(["-t", "0", "-gpu", "-gpuId", &gpu_id_str, "-d", &dp_bits.to_string(), "-m", "1.5", &tmp_path]);
         } else {
             let range_arg = format!("{}:{}", start_hex, end_hex);
-            cmd.args(["-gpu", "-gpuId", &gpu_id_str, "-d", &dp_bits.to_string(), &pub_hex, &range_arg]);
+            cmd.args(["-gpu", "-gpuId", &gpu_id_str, "-d", &dp_bits.to_string(), "-m", "1.5", &pub_hex, &range_arg]);
         }
     } else if lower_bin.contains("bitcrack") {
         let range_arg = format!("{}:{}", start_hex, end_hex);

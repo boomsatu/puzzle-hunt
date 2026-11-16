@@ -16,53 +16,89 @@ echo -e "${CYAN}================================================================
 
 BACKUP_FILE="${1:-data/puzzle_hunt_backup.sql}"
 
+# Cek apakah ada file .sql atau .sql.gz
 if [ ! -f "$BACKUP_FILE" ]; then
-    echo -e "${RED}❌ ERROR: File backup '$BACKUP_FILE' tidak ditemukan!${NC}"
-    echo "   Pastikan file backup sudah di-copy dari lokal ke folder data/:"
-    echo "   Contoh: data/puzzle_hunt_backup.sql"
-    exit 1
+    if [ -f "data/puzzle_hunt_backup.sql.gz" ]; then
+        BACKUP_FILE="data/puzzle_hunt_backup.sql.gz"
+    elif [ -f "data/puzzle_hunt_backup.sql" ]; then
+        BACKUP_FILE="data/puzzle_hunt_backup.sql"
+    else
+        echo -e "${RED}❌ ERROR: File backup '$BACKUP_FILE' tidak ditemukan!${NC}"
+        echo "   Pastikan file backup sudah ada di folder data/:"
+        echo "   Contoh: data/puzzle_hunt_backup.sql atau data/puzzle_hunt_backup.sql.gz"
+        exit 1
+    fi
 fi
 
 FILE_SIZE=$(du -h "$BACKUP_FILE" | cut -f1)
 echo -e "📦 File backup : ${YELLOW}$BACKUP_FILE ($FILE_SIZE)${NC}"
 
-# 1. Pastikan Docker dan container PostgreSQL berjalan
-if ! docker ps --format "{{.Names}}" | grep -q "puzzle_postgres"; then
-    echo -e "${YELLOW}[*] Menyalakan container PostgreSQL...${NC}"
-    docker compose up -d postgres
-    echo "⏳ Menunggu PostgreSQL siap..."
-    sleep 4
+# 1. Pastikan PostgreSQL berjalan (Docker atau Native)
+IS_DOCKER=false
+if command -v docker &>/dev/null && docker ps &>/dev/null; then
+    IS_DOCKER=true
+    if ! docker ps --format "{{.Names}}" | grep -q "puzzle_postgres"; then
+        echo -e "${YELLOW}[*] Menyalakan container PostgreSQL...${NC}"
+        docker compose up -d postgres
+        echo "⏳ Menunggu PostgreSQL siap..."
+        sleep 4
+    fi
+
+    MAX_WAIT=20
+    WAITED=0
+    until docker exec puzzle_postgres pg_isready -U postgres -d puzzle_hunt &>/dev/null || [ $WAITED -ge $MAX_WAIT ]; do
+        echo "⏳ Menunggu database ready... ($WAITED/$MAX_WAIT)"
+        sleep 2
+        WAITED=$((WAITED+2))
+    done
+
+    if [ $WAITED -ge $MAX_WAIT ]; then
+        echo -e "${RED}❌ Timeout: PostgreSQL belum siap di container puzzle_postgres.${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✅ Container PostgreSQL aktif dan siap menerima data.${NC}"
+else
+    # Native PostgreSQL
+    service postgresql start 2>/dev/null || sudo service postgresql start 2>/dev/null || true
+    echo -e "${GREEN}✅ PostgreSQL (Native) siap menerima data.${NC}"
 fi
 
-# Tunggu pg_isready
-MAX_WAIT=20
-WAITED=0
-until docker exec puzzle_postgres pg_isready -U postgres -d puzzle_hunt &>/dev/null || [ $WAITED -ge $MAX_WAIT ]; do
-    echo "⏳ Menunggu database ready... ($WAITED/$MAX_WAIT)"
-    sleep 2
-    WAITED=$((WAITED+2))
-done
-
-if [ $WAITED -ge $MAX_WAIT ]; then
-    echo -e "${RED}❌ Timeout: PostgreSQL belum siap di container puzzle_postgres.${NC}"
-    exit 1
-fi
-
-echo -e "${GREEN}✅ Container PostgreSQL aktif dan siap menerima data.${NC}"
-
-# 2. Import database
+# 2. Import database (mendukung .sql biasa maupun .sql.gz)
 echo -e "${YELLOW}[*] Mengimpor data ke PostgreSQL (mungkin butuh beberapa detik)...${NC}"
-docker exec -i puzzle_postgres psql -U postgres -d puzzle_hunt < "$BACKUP_FILE" > /dev/null 2>&1 || {
-    # Coba tanpa redirect dev/null jika ada issue
-    docker exec -i puzzle_postgres psql -U postgres -d puzzle_hunt < "$BACKUP_FILE"
-}
+
+IMPORT_CMD="psql -U postgres -d puzzle_hunt"
+
+if [ "$IS_DOCKER" = true ]; then
+    if [[ "$BACKUP_FILE" == *.gz ]]; then
+        gunzip -c "$BACKUP_FILE" | docker exec -i puzzle_postgres psql -U postgres -d puzzle_hunt > /dev/null 2>&1 || \
+        gunzip -c "$BACKUP_FILE" | docker exec -i puzzle_postgres psql -U postgres -d puzzle_hunt
+    else
+        docker exec -i puzzle_postgres psql -U postgres -d puzzle_hunt < "$BACKUP_FILE" > /dev/null 2>&1 || \
+        docker exec -i puzzle_postgres psql -U postgres -d puzzle_hunt < "$BACKUP_FILE"
+    fi
+else
+    export PGPASSWORD=postgrespassword
+    if [[ "$BACKUP_FILE" == *.gz ]]; then
+        gunzip -c "$BACKUP_FILE" | psql -h localhost -U postgres -d puzzle_hunt > /dev/null 2>&1 || \
+        gunzip -c "$BACKUP_FILE" | sudo -u postgres psql -d puzzle_hunt
+    else
+        psql -h localhost -U postgres -d puzzle_hunt < "$BACKUP_FILE" > /dev/null 2>&1 || \
+        sudo -u postgres psql -d puzzle_hunt < "$BACKUP_FILE"
+    fi
+fi
 
 # 3. Verifikasi jumlah data
 echo ""
 echo -e "${CYAN}🔍 Memverifikasi hasil import:${NC}"
-PUZZLE_COUNT=$(docker exec puzzle_postgres psql -U postgres -d puzzle_hunt -t -c "SELECT count(*) FROM puzzles;" | tr -d '[:space:]')
-WINDOWS_COUNT=$(docker exec puzzle_postgres psql -U postgres -d puzzle_hunt -t -c "SELECT count(*) FROM scanned_windows;" | tr -d '[:space:]')
-FOUND_COUNT=$(docker exec puzzle_postgres psql -U postgres -d puzzle_hunt -t -c "SELECT count(*) FROM found_keys;" | tr -d '[:space:]')
+if [ "$IS_DOCKER" = true ]; then
+    PUZZLE_COUNT=$(docker exec puzzle_postgres psql -U postgres -d puzzle_hunt -t -c "SELECT count(*) FROM puzzles;" 2>/dev/null | tr -d '[:space:]')
+    WINDOWS_COUNT=$(docker exec puzzle_postgres psql -U postgres -d puzzle_hunt -t -c "SELECT count(*) FROM scanned_windows;" 2>/dev/null | tr -d '[:space:]')
+    FOUND_COUNT=$(docker exec puzzle_postgres psql -U postgres -d puzzle_hunt -t -c "SELECT count(*) FROM found_keys;" 2>/dev/null | tr -d '[:space:]')
+else
+    PUZZLE_COUNT=$(PGPASSWORD=postgrespassword psql -h localhost -U postgres -d puzzle_hunt -t -c "SELECT count(*) FROM puzzles;" 2>/dev/null | tr -d '[:space:]' || sudo -u postgres psql -d puzzle_hunt -t -c "SELECT count(*) FROM puzzles;" | tr -d '[:space:]')
+    WINDOWS_COUNT=$(PGPASSWORD=postgrespassword psql -h localhost -U postgres -d puzzle_hunt -t -c "SELECT count(*) FROM scanned_windows;" 2>/dev/null | tr -d '[:space:]' || sudo -u postgres psql -d puzzle_hunt -t -c "SELECT count(*) FROM scanned_windows;" | tr -d '[:space:]')
+    FOUND_COUNT=$(PGPASSWORD=postgrespassword psql -h localhost -U postgres -d puzzle_hunt -t -c "SELECT count(*) FROM found_keys;" 2>/dev/null | tr -d '[:space:]' || sudo -u postgres psql -d puzzle_hunt -t -c "SELECT count(*) FROM found_keys;" | tr -d '[:space:]')
+fi
 
 echo -e "   📋 Puzzles terdaftar      : ${GREEN}$PUZZLE_COUNT${NC}"
 echo -e "   🔍 Scanned Windows riwayat : ${GREEN}$WINDOWS_COUNT${NC}"

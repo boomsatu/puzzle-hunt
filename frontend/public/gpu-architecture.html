@@ -1,0 +1,1412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GPU Architecture — Bitcoin Puzzle Hunter</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+
+        :root {
+            --bg-primary: #0a0e1a;
+            --bg-secondary: #111827;
+            --bg-card: #1a1f35;
+            --bg-card-hover: #1f2642;
+            --accent-blue: #3b82f6;
+            --accent-cyan: #06b6d4;
+            --accent-green: #10b981;
+            --accent-amber: #f59e0b;
+            --accent-red: #ef4444;
+            --accent-purple: #8b5cf6;
+            --accent-pink: #ec4899;
+            --text-primary: #f1f5f9;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            --border: #1e293b;
+            --glow-blue: rgba(59, 130, 246, 0.15);
+            --glow-green: rgba(16, 185, 129, 0.15);
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            line-height: 1.7;
+            overflow-x: hidden;
+        }
+
+        /* Animated background */
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: 
+                radial-gradient(ellipse 80% 50% at 20% 40%, rgba(59, 130, 246, 0.06), transparent),
+                radial-gradient(ellipse 60% 40% at 80% 20%, rgba(139, 92, 246, 0.05), transparent),
+                radial-gradient(ellipse 50% 60% at 50% 80%, rgba(6, 182, 212, 0.04), transparent);
+            z-index: -1;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 24px;
+        }
+
+        /* Hero Section */
+        .hero {
+            padding: 80px 0 60px;
+            text-align: center;
+            position: relative;
+        }
+
+        .hero-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 16px;
+            background: rgba(59, 130, 246, 0.1);
+            border: 1px solid rgba(59, 130, 246, 0.3);
+            border-radius: 100px;
+            font-size: 13px;
+            color: var(--accent-blue);
+            font-weight: 600;
+            margin-bottom: 24px;
+            letter-spacing: 0.5px;
+        }
+
+        .hero h1 {
+            font-size: 52px;
+            font-weight: 900;
+            background: linear-gradient(135deg, #f1f5f9, #3b82f6, #06b6d4);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 16px;
+            letter-spacing: -1.5px;
+        }
+
+        .hero p {
+            font-size: 18px;
+            color: var(--text-secondary);
+            max-width: 700px;
+            margin: 0 auto;
+        }
+
+        /* Section Headers */
+        .section {
+            padding: 60px 0;
+        }
+
+        .section-header {
+            margin-bottom: 40px;
+        }
+
+        .section-header h2 {
+            font-size: 32px;
+            font-weight: 800;
+            margin-bottom: 8px;
+            letter-spacing: -0.5px;
+        }
+
+        .section-header p {
+            color: var(--text-secondary);
+            font-size: 16px;
+        }
+
+        /* GPU Spec Card */
+        .gpu-hero-card {
+            background: linear-gradient(135deg, #1a1f35 0%, #0f1629 100%);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+            border-radius: 20px;
+            padding: 48px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .gpu-hero-card::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, var(--accent-blue), var(--accent-cyan), var(--accent-green));
+        }
+
+        .gpu-hero-card::after {
+            content: '';
+            position: absolute;
+            top: -100px; right: -100px;
+            width: 400px; height: 400px;
+            background: radial-gradient(circle, rgba(59, 130, 246, 0.08), transparent 70%);
+            pointer-events: none;
+        }
+
+        .gpu-name {
+            font-size: 28px;
+            font-weight: 800;
+            margin-bottom: 4px;
+        }
+
+        .gpu-arch {
+            color: var(--accent-cyan);
+            font-size: 14px;
+            font-weight: 600;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            margin-bottom: 32px;
+        }
+
+        .gpu-specs-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 24px;
+        }
+
+        .gpu-spec-item {
+            text-align: center;
+        }
+
+        .gpu-spec-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 32px;
+            font-weight: 700;
+            color: var(--accent-blue);
+        }
+
+        .gpu-spec-label {
+            font-size: 12px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-top: 4px;
+        }
+
+        /* Comparison Cards */
+        .comparison-grid {
+            display: grid;
+            grid-template-columns: 1fr 60px 1fr;
+            gap: 0;
+            align-items: stretch;
+        }
+
+        .compare-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 32px;
+            transition: all 0.3s;
+        }
+
+        .compare-card:hover {
+            border-color: rgba(59, 130, 246, 0.3);
+            background: var(--bg-card-hover);
+        }
+
+        .compare-card.gpu {
+            border-color: rgba(16, 185, 129, 0.3);
+            background: linear-gradient(135deg, rgba(16, 185, 129, 0.05), var(--bg-card));
+        }
+
+        .compare-card.gpu:hover {
+            border-color: rgba(16, 185, 129, 0.5);
+        }
+
+        .compare-vs {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .compare-vs span {
+            background: var(--bg-card);
+            border: 2px solid var(--border);
+            border-radius: 50%;
+            width: 48px;
+            height: 48px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 800;
+            font-size: 14px;
+            color: var(--text-muted);
+        }
+
+        .compare-label {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            color: var(--text-muted);
+            margin-bottom: 8px;
+        }
+
+        .compare-title {
+            font-size: 20px;
+            font-weight: 700;
+            margin-bottom: 24px;
+        }
+
+        .compare-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .compare-row:last-child { border: none; }
+
+        .compare-row-label {
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+
+        .compare-row-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        /* Speed Benchmark Cards */
+        .speed-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+        }
+
+        .speed-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 28px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .speed-card .speed-icon {
+            width: 44px;
+            height: 44px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 22px;
+            margin-bottom: 16px;
+        }
+
+        .speed-card.address .speed-icon { background: rgba(245, 158, 11, 0.15); }
+        .speed-card.kangaroo .speed-icon { background: rgba(16, 185, 129, 0.15); }
+
+        .speed-card h3 {
+            font-size: 16px;
+            font-weight: 700;
+            margin-bottom: 4px;
+        }
+
+        .speed-card .mode-desc {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-bottom: 20px;
+        }
+
+        .speed-bar-container {
+            margin-bottom: 16px;
+        }
+
+        .speed-bar-header {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            margin-bottom: 6px;
+        }
+
+        .speed-bar-header .label { color: var(--text-muted); }
+        .speed-bar-header .value { 
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 600;
+        }
+
+        .speed-bar {
+            height: 8px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .speed-bar-fill {
+            height: 100%;
+            border-radius: 4px;
+            transition: width 1.5s ease;
+        }
+
+        .speed-bar-fill.cpu { background: linear-gradient(90deg, var(--accent-amber), #d97706); }
+        .speed-bar-fill.gpu { background: linear-gradient(90deg, var(--accent-green), var(--accent-cyan)); }
+
+        .speedup-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 12px;
+            border-radius: 100px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 13px;
+            font-weight: 700;
+        }
+
+        .speedup-badge.massive {
+            background: rgba(16, 185, 129, 0.15);
+            color: var(--accent-green);
+        }
+
+        .speedup-badge.moderate {
+            background: rgba(59, 130, 246, 0.15);
+            color: var(--accent-blue);
+        }
+
+        /* Architecture Diagram */
+        .arch-diagram {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 40px;
+            margin: 24px 0;
+        }
+
+        .arch-flow {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 16px;
+            flex-wrap: wrap;
+            margin: 24px 0;
+        }
+
+        .arch-node {
+            padding: 16px 24px;
+            border-radius: 12px;
+            text-align: center;
+            min-width: 140px;
+        }
+
+        .arch-node.rust {
+            background: linear-gradient(135deg, rgba(245, 158, 11, 0.15), rgba(245, 158, 11, 0.05));
+            border: 1px solid rgba(245, 158, 11, 0.3);
+        }
+
+        .arch-node.cuda {
+            background: linear-gradient(135deg, rgba(16, 185, 129, 0.15), rgba(16, 185, 129, 0.05));
+            border: 1px solid rgba(16, 185, 129, 0.3);
+        }
+
+        .arch-node.db {
+            background: linear-gradient(135deg, rgba(139, 92, 246, 0.15), rgba(139, 92, 246, 0.05));
+            border: 1px solid rgba(139, 92, 246, 0.3);
+        }
+
+        .arch-node.ws {
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.15), rgba(59, 130, 246, 0.05));
+            border: 1px solid rgba(59, 130, 246, 0.3);
+        }
+
+        .arch-node-title {
+            font-weight: 700;
+            font-size: 14px;
+            margin-bottom: 2px;
+        }
+
+        .arch-node-desc {
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+
+        .arch-arrow {
+            font-size: 20px;
+            color: var(--text-muted);
+        }
+
+        /* Modulo Zero Section */
+        .modulo-card {
+            background: linear-gradient(135deg, rgba(139, 92, 246, 0.08), var(--bg-card));
+            border: 1px solid rgba(139, 92, 246, 0.2);
+            border-radius: 16px;
+            padding: 36px;
+        }
+
+        .modulo-formula {
+            font-family: 'JetBrains Mono', monospace;
+            background: rgba(0, 0, 0, 0.3);
+            padding: 20px 28px;
+            border-radius: 10px;
+            margin: 20px 0;
+            border-left: 3px solid var(--accent-purple);
+            font-size: 15px;
+            line-height: 2;
+        }
+
+        .modulo-formula .highlight {
+            color: var(--accent-green);
+            font-weight: 700;
+        }
+
+        .modulo-formula .dim { color: var(--text-muted); }
+
+        /* Round Calculation Table */
+        .calc-table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            margin: 20px 0;
+        }
+
+        .calc-table thead th {
+            background: rgba(59, 130, 246, 0.1);
+            padding: 14px 20px;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--accent-blue);
+            text-align: left;
+            font-weight: 700;
+        }
+
+        .calc-table thead th:first-child { border-radius: 10px 0 0 0; }
+        .calc-table thead th:last-child { border-radius: 0 10px 0 0; }
+
+        .calc-table tbody td {
+            padding: 14px 20px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+            font-size: 14px;
+        }
+
+        .calc-table tbody tr:hover {
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        .calc-table .mono {
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 600;
+        }
+
+        .calc-table .green { color: var(--accent-green); }
+        .calc-table .blue { color: var(--accent-blue); }
+        .calc-table .amber { color: var(--accent-amber); }
+        .calc-table .red { color: var(--accent-red); }
+        .calc-table .cyan { color: var(--accent-cyan); }
+
+        /* GPU Comparison Bar Chart */
+        .chart-container {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 36px;
+        }
+
+        .chart-bar-row {
+            display: flex;
+            align-items: center;
+            margin-bottom: 16px;
+            gap: 16px;
+        }
+
+        .chart-bar-label {
+            width: 160px;
+            font-size: 13px;
+            font-weight: 600;
+            text-align: right;
+            flex-shrink: 0;
+        }
+
+        .chart-bar-track {
+            flex: 1;
+            height: 32px;
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 6px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .chart-bar-fill {
+            height: 100%;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            padding-right: 12px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            font-weight: 700;
+            color: white;
+            transition: width 2s ease;
+        }
+
+        .chart-bar-fill.turing { background: linear-gradient(90deg, #6b7280, #9ca3af); }
+        .chart-bar-fill.ampere { background: linear-gradient(90deg, #f59e0b, #d97706); }
+        .chart-bar-fill.ada { background: linear-gradient(90deg, #3b82f6, #2563eb); }
+        .chart-bar-fill.blackwell { background: linear-gradient(90deg, #10b981, #06b6d4); }
+        .chart-bar-fill.hpc { background: linear-gradient(90deg, #8b5cf6, #7c3aed); }
+        .chart-bar-fill.cpu { background: linear-gradient(90deg, #ef4444, #dc2626); width: 0.5% !important; }
+
+        /* Cost Analysis */
+        .cost-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 16px;
+        }
+
+        .cost-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 24px;
+            text-align: center;
+            transition: all 0.3s;
+        }
+
+        .cost-card:hover {
+            transform: translateY(-2px);
+            border-color: rgba(59, 130, 246, 0.3);
+        }
+
+        .cost-card.best {
+            border-color: rgba(16, 185, 129, 0.4);
+            background: linear-gradient(135deg, rgba(16, 185, 129, 0.06), var(--bg-card));
+        }
+
+        .cost-gpu-name {
+            font-weight: 700;
+            font-size: 15px;
+            margin-bottom: 4px;
+        }
+
+        .cost-price {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 28px;
+            font-weight: 800;
+            margin: 12px 0;
+        }
+
+        .cost-price .unit {
+            font-size: 14px;
+            color: var(--text-muted);
+            font-weight: 400;
+        }
+
+        .cost-detail {
+            font-size: 12px;
+            color: var(--text-muted);
+            line-height: 1.8;
+        }
+
+        /* CUDA Compilation Notes */
+        .code-block {
+            background: #0d1117;
+            border: 1px solid #21262d;
+            border-radius: 10px;
+            padding: 20px 24px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 13px;
+            line-height: 1.8;
+            overflow-x: auto;
+            margin: 16px 0;
+        }
+
+        .code-block .comment { color: #8b949e; }
+        .code-block .keyword { color: #ff7b72; }
+        .code-block .string { color: #a5d6ff; }
+        .code-block .flag { color: #79c0ff; }
+        .code-block .value { color: #7ee787; }
+
+        /* Warning / Info Boxes */
+        .alert {
+            border-radius: 12px;
+            padding: 20px 24px;
+            margin: 20px 0;
+            display: flex;
+            gap: 14px;
+            align-items: flex-start;
+        }
+
+        .alert-icon {
+            font-size: 20px;
+            flex-shrink: 0;
+            margin-top: 2px;
+        }
+
+        .alert-content h4 {
+            font-size: 14px;
+            font-weight: 700;
+            margin-bottom: 4px;
+        }
+
+        .alert-content p {
+            font-size: 13px;
+            color: var(--text-secondary);
+            line-height: 1.6;
+        }
+
+        .alert.warning {
+            background: rgba(245, 158, 11, 0.08);
+            border: 1px solid rgba(245, 158, 11, 0.2);
+        }
+
+        .alert.warning .alert-content h4 { color: var(--accent-amber); }
+
+        .alert.info {
+            background: rgba(59, 130, 246, 0.08);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+        }
+
+        .alert.info .alert-content h4 { color: var(--accent-blue); }
+
+        .alert.success {
+            background: rgba(16, 185, 129, 0.08);
+            border: 1px solid rgba(16, 185, 129, 0.2);
+        }
+
+        .alert.success .alert-content h4 { color: var(--accent-green); }
+
+        /* Footer */
+        .footer {
+            text-align: center;
+            padding: 40px 0;
+            border-top: 1px solid var(--border);
+            margin-top: 60px;
+        }
+
+        .footer p {
+            color: var(--text-muted);
+            font-size: 13px;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .hero h1 { font-size: 32px; }
+            .gpu-hero-card { padding: 28px; }
+            .gpu-spec-value { font-size: 24px; }
+            .comparison-grid { grid-template-columns: 1fr; gap: 16px; }
+            .compare-vs { display: none; }
+            .chart-bar-label { width: 100px; font-size: 11px; }
+        }
+
+        /* Animations */
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .animate { animation: fadeInUp 0.6s ease forwards; }
+        .delay-1 { animation-delay: 0.1s; opacity: 0; }
+        .delay-2 { animation-delay: 0.2s; opacity: 0; }
+        .delay-3 { animation-delay: 0.3s; opacity: 0; }
+    </style>
+</head>
+<body>
+
+<!-- Hero -->
+<section class="hero">
+    <div class="container">
+        <div class="hero-badge animate">⚡ GPU ACCELERATION DOCS</div>
+        <h1 class="animate delay-1">Bitcoin Puzzle Hunter<br>GPU Architecture</h1>
+        <p class="animate delay-2">Dokumentasi konsep, arsitektur, dan benchmark performa GPU mode untuk Bitcoin Puzzle Hunter Engine — mendukung NVIDIA RTX PRO 6000 Blackwell hingga 10 Miliar keys/detik.</p>
+    </div>
+</section>
+
+<!-- GPU Spec Card -->
+<section class="section">
+    <div class="container">
+        <div class="gpu-hero-card animate delay-1">
+            <div class="gpu-name">NVIDIA RTX PRO 6000</div>
+            <div class="gpu-arch">Blackwell Architecture — GB202GL — TSMC 4N (5nm) — 92.2B Transistors</div>
+            <div class="gpu-specs-grid">
+                <div class="gpu-spec-item">
+                    <div class="gpu-spec-value">24,064</div>
+                    <div class="gpu-spec-label">CUDA Cores</div>
+                </div>
+                <div class="gpu-spec-item">
+                    <div class="gpu-spec-value">188</div>
+                    <div class="gpu-spec-label">Streaming Multiprocessors</div>
+                </div>
+                <div class="gpu-spec-item">
+                    <div class="gpu-spec-value">96 GB</div>
+                    <div class="gpu-spec-label">GDDR7 ECC VRAM</div>
+                </div>
+                <div class="gpu-spec-item">
+                    <div class="gpu-spec-value">1,792</div>
+                    <div class="gpu-spec-label">GB/s Bandwidth</div>
+                </div>
+                <div class="gpu-spec-item">
+                    <div class="gpu-spec-value">125</div>
+                    <div class="gpu-spec-label">TFLOPS FP32</div>
+                </div>
+                <div class="gpu-spec-item">
+                    <div class="gpu-spec-value">sm_120</div>
+                    <div class="gpu-spec-label">Compute Capability</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- CPU vs GPU Comparison -->
+<section class="section">
+    <div class="container">
+        <div class="section-header">
+            <h2>⚡ CPU vs GPU — Head to Head</h2>
+            <p>Perbandingan performa antara mode CPU lokal dan GPU CUDA hosting</p>
+        </div>
+
+        <div class="comparison-grid">
+            <div class="compare-card">
+                <div class="compare-label">Current Baseline</div>
+                <div class="compare-title">🖥️ AMD Ryzen 7 5800H</div>
+                <div class="compare-row">
+                    <span class="compare-row-label">Architecture</span>
+                    <span class="compare-row-value">Zen 3 (CPU)</span>
+                </div>
+                <div class="compare-row">
+                    <span class="compare-row-label">Compute Units</span>
+                    <span class="compare-row-value">8 cores / 16 threads</span>
+                </div>
+                <div class="compare-row">
+                    <span class="compare-row-label">Clock Speed</span>
+                    <span class="compare-row-value">3,201 MHz</span>
+                </div>
+                <div class="compare-row">
+                    <span class="compare-row-label">Memory</span>
+                    <span class="compare-row-value">15 GB DDR4</span>
+                </div>
+                <div class="compare-row">
+                    <span class="compare-row-label">Bandwidth</span>
+                    <span class="compare-row-value">~51 GB/s</span>
+                </div>
+                <div class="compare-row">
+                    <span class="compare-row-label">Address Scanner</span>
+                    <span class="compare-row-value" style="color: var(--accent-amber)">1.2 M keys/s</span>
+                </div>
+                <div class="compare-row">
+                    <span class="compare-row-label">Kangaroo Mode</span>
+                    <span class="compare-row-value" style="color: var(--accent-amber)">3.27 B keys/s</span>
+                </div>
+                <div class="compare-row">
+                    <span class="compare-row-label">Workers/Round</span>
+                    <span class="compare-row-value">8</span>
+                </div>
+                <div class="compare-row">
+                    <span class="compare-row-label">Window Size</span>
+                    <span class="compare-row-value">2¹⁸ (262K) / 2³⁰ (1.07B)</span>
+                </div>
+            </div>
+
+            <div class="compare-vs"><span>VS</span></div>
+
+            <div class="compare-card gpu">
+                <div class="compare-label">Target GPU</div>
+                <div class="compare-title">🚀 RTX PRO 6000 Blackwell</div>
+                <div class="compare-row">
+                    <span class="compare-row-label">Architecture</span>
+                    <span class="compare-row-value" style="color: var(--accent-green)">Blackwell (GB202)</span>
+                </div>
+                <div class="compare-row">
+                    <span class="compare-row-label">Compute Units</span>
+                    <span class="compare-row-value" style="color: var(--accent-green)">24,064 CUDA Cores</span>
+                </div>
+                <div class="compare-row">
+                    <span class="compare-row-label">Clock Speed</span>
+                    <span class="compare-row-value">~2,500 MHz</span>
+                </div>
+                <div class="compare-row">
+                    <span class="compare-row-label">Memory</span>
+                    <span class="compare-row-value" style="color: var(--accent-green)">96 GB GDDR7 ECC</span>
+                </div>
+                <div class="compare-row">
+                    <span class="compare-row-label">Bandwidth</span>
+                    <span class="compare-row-value" style="color: var(--accent-green)">1,792 GB/s</span>
+                </div>
+                <div class="compare-row">
+                    <span class="compare-row-label">Address Scanner</span>
+                    <span class="compare-row-value" style="color: var(--accent-green)">~8-10 B keys/s</span>
+                </div>
+                <div class="compare-row">
+                    <span class="compare-row-label">Kangaroo Mode</span>
+                    <span class="compare-row-value" style="color: var(--accent-green)">~12-18 B keys/s</span>
+                </div>
+                <div class="compare-row">
+                    <span class="compare-row-label">Workers/Round</span>
+                    <span class="compare-row-value" style="color: var(--accent-green)">16</span>
+                </div>
+                <div class="compare-row">
+                    <span class="compare-row-label">Window Size</span>
+                    <span class="compare-row-value" style="color: var(--accent-green)">2³⁰ (1.07B) — both modes</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Speed Benchmark -->
+<section class="section">
+    <div class="container">
+        <div class="section-header">
+            <h2>🏎️ Speed Benchmark — Estimated</h2>
+            <p>Perkiraan kecepatan GPU berdasarkan data komunitas Bitcoin Puzzle dan arsitektur Blackwell</p>
+        </div>
+
+        <div class="speed-cards">
+            <div class="speed-card address">
+                <div class="speed-icon">🔍</div>
+                <h3>Address Scanner Mode</h3>
+                <div class="mode-desc">Tanpa Public Key — Brute Force SHA-256 + RIPEMD-160 Hash160</div>
+
+                <div class="speed-bar-container">
+                    <div class="speed-bar-header">
+                        <span class="label">CPU (Ryzen 7 5800H)</span>
+                        <span class="value" style="color: var(--accent-amber)">1.2 M k/s</span>
+                    </div>
+                    <div class="speed-bar"><div class="speed-bar-fill cpu" style="width: 0.015%"></div></div>
+                </div>
+
+                <div class="speed-bar-container">
+                    <div class="speed-bar-header">
+                        <span class="label">GPU (RTX PRO 6000 BW)</span>
+                        <span class="value" style="color: var(--accent-green)">~8.0 B k/s</span>
+                    </div>
+                    <div class="speed-bar"><div class="speed-bar-fill gpu" style="width: 80%"></div></div>
+                </div>
+
+                <div style="margin-top: 16px">
+                    <span class="speedup-badge massive">🔥 ~6,667× Speedup</span>
+                </div>
+            </div>
+
+            <div class="speed-card kangaroo">
+                <div class="speed-icon">🦘</div>
+                <h3>Kangaroo Mode</h3>
+                <div class="mode-desc">Dengan Public Key — Pollard's Kangaroo EC Point Addition</div>
+
+                <div class="speed-bar-container">
+                    <div class="speed-bar-header">
+                        <span class="label">CPU (Ryzen 7 5800H)</span>
+                        <span class="value" style="color: var(--accent-amber)">3.27 B k/s</span>
+                    </div>
+                    <div class="speed-bar"><div class="speed-bar-fill cpu" style="width: 27%"></div></div>
+                </div>
+
+                <div class="speed-bar-container">
+                    <div class="speed-bar-header">
+                        <span class="label">GPU (RTX PRO 6000 BW)</span>
+                        <span class="value" style="color: var(--accent-green)">~12.0 B k/s</span>
+                    </div>
+                    <div class="speed-bar"><div class="speed-bar-fill gpu" style="width: 100%"></div></div>
+                </div>
+
+                <div style="margin-top: 16px">
+                    <span class="speedup-badge moderate">⚡ ~3.7× Speedup</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Round Calculation Table -->
+<section class="section">
+    <div class="container">
+        <div class="section-header">
+            <h2>📐 Perhitungan Per Ronde — GPU Mode</h2>
+            <p>Detail hitungan window, keys, dan waktu per ronde di GPU mode</p>
+        </div>
+
+        <table class="calc-table">
+            <thead>
+                <tr>
+                    <th>Parameter</th>
+                    <th>Address Scanner (GPU)</th>
+                    <th>Kangaroo (GPU)</th>
+                    <th>Address Scanner (CPU)</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>Workers per Round</td>
+                    <td class="mono green">16</td>
+                    <td class="mono green">16</td>
+                    <td class="mono amber">8</td>
+                </tr>
+                <tr>
+                    <td>Window Bits</td>
+                    <td class="mono green">2³⁰</td>
+                    <td class="mono green">2³⁰</td>
+                    <td class="mono amber">2¹⁸</td>
+                </tr>
+                <tr>
+                    <td>Keys per Worker</td>
+                    <td class="mono">1,073,741,824</td>
+                    <td class="mono">1,073,741,824</td>
+                    <td class="mono">262,144</td>
+                </tr>
+                <tr>
+                    <td>Keys per Round</td>
+                    <td class="mono cyan">17,179,869,184</td>
+                    <td class="mono cyan">17,179,869,184</td>
+                    <td class="mono">2,097,152</td>
+                </tr>
+                <tr>
+                    <td>GPU/CPU Speed</td>
+                    <td class="mono green">~8 B k/s</td>
+                    <td class="mono green">~12 B k/s</td>
+                    <td class="mono amber">1.2 M k/s</td>
+                </tr>
+                <tr>
+                    <td>Time per Round</td>
+                    <td class="mono green">~2,300 ms</td>
+                    <td class="mono green">~1,500 ms</td>
+                    <td class="mono amber">~1,750 ms</td>
+                </tr>
+                <tr>
+                    <td>Jump Positions</td>
+                    <td class="mono green">16 lokasi random</td>
+                    <td class="mono green">16 lokasi random</td>
+                    <td class="mono amber">8 lokasi random</td>
+                </tr>
+                <tr>
+                    <td>Keys per Hour</td>
+                    <td class="mono cyan">~28.8 Triliun</td>
+                    <td class="mono cyan">~43.2 Triliun</td>
+                    <td class="mono">~4.32 Miliar</td>
+                </tr>
+                <tr>
+                    <td>Keys per Day</td>
+                    <td class="mono cyan">~691.2 Triliun</td>
+                    <td class="mono cyan">~1,036.8 Triliun</td>
+                    <td class="mono">~103.7 Miliar</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</section>
+
+<!-- Modulo Zero Guarantee -->
+<section class="section">
+    <div class="container">
+        <div class="section-header">
+            <h2>🎯 Modulo Zero — Pembagian Sempurna</h2>
+            <p>Konsep inti: setiap ronde harus memproses jumlah key yang membagi habis keyspace tanpa sisa</p>
+        </div>
+
+        <div class="modulo-card">
+            <h3 style="margin-bottom: 16px;">Mengapa Modulo 0 Penting?</h3>
+            <p style="color: var(--text-secondary); margin-bottom: 16px;">
+                Jika keyspace tidak habis dibagi window size, akan ada "celah" kecil di akhir rentang yang tidak pernah diperiksa — 
+                key yang tersembunyi di celah itu tidak akan pernah ditemukan. Dengan jaminan modulo 0, <strong>setiap key dalam keyspace pasti akan tercakup.</strong>
+            </p>
+
+            <div class="modulo-formula">
+                <span class="dim">// Contoh Puzzle #71 (71-bit)</span><br>
+                Keyspace = 2⁷⁰ = <span class="highlight">1,180,591,620,717,411,303,424</span><br>
+                Window   = 2³⁰ = <span class="highlight">1,073,741,824</span><br><br>
+                <span class="dim">// Pembagian:</span><br>
+                2⁷⁰ ÷ 2³⁰ = 2⁴⁰ = <span class="highlight">1,099,511,627,776</span> windows<br>
+                <span class="dim">// Sisa pembagian:</span><br>
+                2⁷⁰ mod 2³⁰ = <span class="highlight" style="color: #10b981; font-size: 18px;">0</span> ✅ Sempurna!<br><br>
+
+                <span class="dim">// GPU: 16 workers × 2³⁰ per round</span><br>
+                Keys/round = 16 × 2³⁰ = 2³⁴ = <span class="highlight">17,179,869,184</span><br>
+                2⁷⁰ ÷ 2³⁴ = 2³⁶ = <span class="highlight">68,719,476,736</span> rounds<br>
+                2⁷⁰ mod 2³⁴ = <span class="highlight" style="color: #10b981; font-size: 18px;">0</span> ✅ Sempurna!
+            </div>
+
+            <div class="alert success">
+                <div class="alert-icon">✅</div>
+                <div class="alert-content">
+                    <h4>Double Guarantee</h4>
+                    <p>
+                        <strong>1. Standard Puzzles:</strong> Keyspace = 2^(N-1), window = 2³⁰ → selalu habis dibagi karena keduanya power-of-2.<br>
+                        <strong>2. Custom Puzzles:</strong> Auto-Padding menambah key ke batas akhir agar total habis dibagi window size → sisa 0 terjamin.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Architecture Diagram -->
+<section class="section">
+    <div class="container">
+        <div class="section-header">
+            <h2>🏗️ GPU Pipeline Architecture</h2>
+            <p>Alur pemrosesan dari Rust backend ke CUDA solver dan kembali ke dashboard</p>
+        </div>
+
+        <div class="arch-diagram">
+            <div class="arch-flow">
+                <div class="arch-node rust">
+                    <div class="arch-node-title">🦀 Rust Engine</div>
+                    <div class="arch-node-desc">Hunt Manager<br>pick_window_smart()</div>
+                </div>
+                <div class="arch-arrow">→</div>
+                <div class="arch-node rust">
+                    <div class="arch-node-title">📦 Batch 16 Windows</div>
+                    <div class="arch-node-desc">16 random positions<br>across keyspace</div>
+                </div>
+                <div class="arch-arrow">→</div>
+                <div class="arch-node cuda">
+                    <div class="arch-node-title">⚡ CUDA Solver</div>
+                    <div class="arch-node-desc">BitCrack / Kangaroo<br>24,064 CUDA Cores</div>
+                </div>
+                <div class="arch-arrow">→</div>
+                <div class="arch-node db">
+                    <div class="arch-node-title">🗄️ PostgreSQL</div>
+                    <div class="arch-node-desc">scanned_windows<br>found_keys</div>
+                </div>
+                <div class="arch-arrow">→</div>
+                <div class="arch-node ws">
+                    <div class="arch-node-title">📡 WebSocket</div>
+                    <div class="arch-node-desc">Live Dashboard<br>Real-time updates</div>
+                </div>
+            </div>
+
+            <div class="alert info" style="margin-top: 24px">
+                <div class="alert-icon">💡</div>
+                <div class="alert-content">
+                    <h4>CUDA Time-Slicing</h4>
+                    <p>16 worker processes dikirim ke GPU secara paralel, tapi CUDA driver men-serialize mereka via <strong>time-slicing</strong> — hanya 1 solver aktif di GPU per waktu. 
+                    Ini memberikan full compute power per window tanpa resource contention, sambil tetap mendapatkan 16 posisi jump berbeda per ronde.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- GPU Comparison Chart -->
+<section class="section">
+    <div class="container">
+        <div class="section-header">
+            <h2>📊 GPU Throughput Comparison</h2>
+            <p>Estimasi keys/detik per GPU — Mode Address Scanner (secp256k1 + SHA-256 + RIPEMD-160)</p>
+        </div>
+
+        <div class="chart-container">
+            <div class="chart-bar-row">
+                <div class="chart-bar-label" style="color: var(--accent-red)">CPU Ryzen 7</div>
+                <div class="chart-bar-track">
+                    <div class="chart-bar-fill cpu">1.2M</div>
+                </div>
+            </div>
+            <div class="chart-bar-row">
+                <div class="chart-bar-label">RTX 3090</div>
+                <div class="chart-bar-track">
+                    <div class="chart-bar-fill ampere" style="width: 20%">2.0 B</div>
+                </div>
+            </div>
+            <div class="chart-bar-row">
+                <div class="chart-bar-label">RTX A6000</div>
+                <div class="chart-bar-track">
+                    <div class="chart-bar-fill ampere" style="width: 35%">3.5 B</div>
+                </div>
+            </div>
+            <div class="chart-bar-row">
+                <div class="chart-bar-label">RTX 4090</div>
+                <div class="chart-bar-track">
+                    <div class="chart-bar-fill ada" style="width: 55%">5.5 B</div>
+                </div>
+            </div>
+            <div class="chart-bar-row">
+                <div class="chart-bar-label">RTX 6000 Ada</div>
+                <div class="chart-bar-track">
+                    <div class="chart-bar-fill ada" style="width: 65%">6.5 B</div>
+                </div>
+            </div>
+            <div class="chart-bar-row">
+                <div class="chart-bar-label">RTX 5090</div>
+                <div class="chart-bar-track">
+                    <div class="chart-bar-fill blackwell" style="width: 80%">8.0 B</div>
+                </div>
+            </div>
+            <div class="chart-bar-row">
+                <div class="chart-bar-label" style="color: var(--accent-green); font-weight: 800">RTX PRO 6000 BW</div>
+                <div class="chart-bar-track">
+                    <div class="chart-bar-fill blackwell" style="width: 95%">9.5 B</div>
+                </div>
+            </div>
+            <div class="chart-bar-row">
+                <div class="chart-bar-label" style="color: var(--accent-purple)">H100 (HPC)</div>
+                <div class="chart-bar-track">
+                    <div class="chart-bar-fill hpc" style="width: 100%">10.0 B</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Cost Analysis -->
+<section class="section">
+    <div class="container">
+        <div class="section-header">
+            <h2>💰 Cost Analysis — Vast.ai Hosting</h2>
+            <p>Perbandingan harga sewa GPU per jam dan efisiensi biaya</p>
+        </div>
+
+        <div class="cost-grid">
+            <div class="cost-card">
+                <div class="cost-gpu-name">RTX 4090</div>
+                <div style="font-size: 12px; color: var(--text-muted)">Ada Lovelace • 24GB</div>
+                <div class="cost-price">$0.40 <span class="unit">/hr</span></div>
+                <div class="cost-detail">
+                    ~5.5 B keys/s<br>
+                    ~$9.60/hari<br>
+                    Best value per dollar 💡
+                </div>
+            </div>
+            <div class="cost-card">
+                <div class="cost-gpu-name">RTX 6000 Ada</div>
+                <div style="font-size: 12px; color: var(--text-muted)">Ada Lovelace • 48GB</div>
+                <div class="cost-price">$0.75 <span class="unit">/hr</span></div>
+                <div class="cost-detail">
+                    ~6.5 B keys/s<br>
+                    ~$18.00/hari<br>
+                    Good for large bloom filters
+                </div>
+            </div>
+            <div class="cost-card best">
+                <div class="cost-gpu-name" style="color: var(--accent-green)">RTX PRO 6000 BW</div>
+                <div style="font-size: 12px; color: var(--accent-green)">Blackwell • 96GB ⭐</div>
+                <div class="cost-price" style="color: var(--accent-green)">$1.50 <span class="unit">/hr</span></div>
+                <div class="cost-detail">
+                    ~9.5 B keys/s<br>
+                    ~$36.00/hari<br>
+                    Maximum absolute speed 🚀
+                </div>
+            </div>
+            <div class="cost-card">
+                <div class="cost-gpu-name">Local CPU</div>
+                <div style="font-size: 12px; color: var(--text-muted)">Ryzen 7 5800H</div>
+                <div class="cost-price" style="color: var(--accent-amber)">$0 <span class="unit">/hr</span></div>
+                <div class="cost-detail">
+                    1.2 M keys/s<br>
+                    Gratis (listrik saja)<br>
+                    Slow but free ♾️
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- CUDA Compilation -->
+<section class="section">
+    <div class="container">
+        <div class="section-header">
+            <h2>🔧 CUDA Compilation — Blackwell sm_120</h2>
+            <p>Instruksi kompilasi solver CUDA untuk arsitektur Blackwell</p>
+        </div>
+
+        <div class="alert warning">
+            <div class="alert-icon">⚠️</div>
+            <div class="alert-content">
+                <h4>Blackwell Membutuhkan CUDA 12.8+</h4>
+                <p>RTX PRO 6000 Blackwell menggunakan Compute Capability 12.0 (<code>sm_120</code>). Binary solver yang dikompilasi untuk <code>sm_86</code> (Ampere) atau <code>sm_89</code> (Ada) akan gagal dengan error <code>invalid device symbol</code>.</p>
+            </div>
+        </div>
+
+        <div class="code-block">
+            <span class="comment"># Verifikasi CUDA Toolkit</span><br>
+            <span class="keyword">nvcc</span> <span class="flag">--version</span>  <span class="comment"># Harus >= 12.8</span><br><br>
+
+            <span class="comment"># Compile cuBitCrack untuk Blackwell</span><br>
+            <span class="keyword">cmake</span> <span class="flag">-DCUDA_NVCC_FLAGS</span>=<span class="string">"-gencode arch=compute_120,code=sm_120"</span> ..<br>
+            <span class="keyword">make</span> <span class="flag">-j$(nproc)</span><br><br>
+
+            <span class="comment"># Optimal runtime parameters untuk 188 SMs</span><br>
+            <span class="keyword">cuBitCrack</span> <span class="flag">-b</span> <span class="value">188</span> <span class="flag">-t</span> <span class="value">256</span> <span class="flag">-p</span> <span class="value">256</span> <span class="flag">-e</span> <span class="flag">-c</span> \<br>
+            &nbsp;&nbsp;&nbsp;&nbsp;<span class="string">&lt;target_address&gt;</span> <span class="flag">--keyspace</span> <span class="string">&lt;start&gt;:&lt;end&gt;</span><br><br>
+
+            <span class="comment"># Kangaroo CUDA (JeanLucPons)</span><br>
+            <span class="keyword">kangaroo</span> <span class="flag">-gpu</span> <span class="flag">-gpuId</span> <span class="value">0</span> <span class="flag">-d</span> <span class="value">18</span> <span class="string">input.txt</span>
+        </div>
+
+        <h3 style="margin: 28px 0 16px">🗂️ Solver Binary Search Path</h3>
+        <p style="color: var(--text-secondary); margin-bottom: 16px; font-size: 14px;">Sistem akan mencari binary solver CUDA secara otomatis di lokasi berikut:</p>
+
+        <div class="code-block">
+            <span class="comment">// Urutan pencarian binary (dari cuda.rs)</span><br>
+            <span class="string">"kangaroo-cuda"</span> → <span class="string">"kangaroo"</span> → <span class="string">"keyhunt"</span><br>
+            → <span class="string">"bitcrack"</span> → <span class="string">"./cuda/kangaroo"</span> → <span class="string">"./bin/kangaroo"</span><br><br>
+
+            <span class="comment">// Set HUNT_MODE di .env untuk mengaktifkan GPU mode</span><br>
+            <span class="keyword">HUNT_MODE</span>=<span class="value">gpu</span>
+        </div>
+    </div>
+</section>
+
+<!-- Strategy: Range Start First, Then Random -->
+<section class="section">
+    <div class="container">
+        <div class="section-header">
+            <h2>🎲 Strategi: Scan Awal → Random Jump</h2>
+            <p>Konsep pick_window_smart() — wajib scan range awal terlebih dahulu, baru random jump</p>
+        </div>
+
+        <div class="arch-diagram">
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 32px;">
+                <div>
+                    <h4 style="margin-bottom: 12px; color: var(--accent-amber)">📍 Phase 1: Sequential Start</h4>
+                    <p style="font-size: 13px; color: var(--text-secondary); line-height: 1.8;">
+                        Ronde-ronde awal <strong>wajib</strong> memindai dari posisi 0% (range start). 
+                        Ini memastikan key yang berada di awal keyspace tidak terlewat. 
+                        Jumlah window prioritas = <code>num_workers</code> pertama dari keyspace.
+                    </p>
+                    <div class="code-block" style="font-size: 12px; margin-top: 12px;">
+                        Window #1: 0x80000...00000000 → 0.00%<br>
+                        Window #2: 0x80000...40000000 → 0.00%<br>
+                        Window #3: 0x80000...80000000 → 0.00%<br>
+                        <span class="comment">... sequential sweep ...</span>
+                    </div>
+                </div>
+                <div>
+                    <h4 style="margin-bottom: 12px; color: var(--accent-green)">🎲 Phase 2: Random Jump</h4>
+                    <p style="font-size: 13px; color: var(--text-secondary); line-height: 1.8;">
+                        Setelah range awal di-sweep, sistem beralih ke <strong>random jump</strong> — 
+                        memilih window secara acak dari seluruh keyspace yang belum dipindai. 
+                        Dengan 16 workers, ada 16 posisi random per ronde.
+                    </p>
+                    <div class="code-block" style="font-size: 12px; margin-top: 12px;">
+                        Window #9: 0xb3982e... → 40.31%<br>
+                        Window #10: 0xddfc22... → 73.43%<br>
+                        Window #11: 0xbcb6a0... → 47.43%<br>
+                        <span class="comment">... random positions ...</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Supported GPUs -->
+<section class="section">
+    <div class="container">
+        <div class="section-header">
+            <h2>🎮 Supported GPU List</h2>
+            <p>Semua GPU yang terdeteksi otomatis oleh sistem (get_gpu_specs di cuda.rs)</p>
+        </div>
+
+        <table class="calc-table">
+            <thead>
+                <tr>
+                    <th>GPU</th>
+                    <th>Architecture</th>
+                    <th>CUDA Cores</th>
+                    <th>SMs</th>
+                    <th>VRAM</th>
+                    <th>Est. Speed</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td class="mono green" style="font-weight: 700">RTX PRO 6000 Blackwell</td>
+                    <td>Blackwell (GB202)</td>
+                    <td class="mono green">24,064</td>
+                    <td class="mono">188</td>
+                    <td>96 GB GDDR7</td>
+                    <td class="mono green">~9.5 B k/s</td>
+                </tr>
+                <tr>
+                    <td class="mono green">RTX 5090</td>
+                    <td>Blackwell (GB202)</td>
+                    <td class="mono green">21,760</td>
+                    <td class="mono">170</td>
+                    <td>32 GB GDDR7</td>
+                    <td class="mono green">~8.0 B k/s</td>
+                </tr>
+                <tr>
+                    <td class="mono">RTX 5080</td>
+                    <td>Blackwell (GB203)</td>
+                    <td class="mono">10,752</td>
+                    <td class="mono">84</td>
+                    <td>16 GB GDDR7</td>
+                    <td class="mono">~4.5 B k/s</td>
+                </tr>
+                <tr>
+                    <td class="mono blue">RTX 6000 Ada</td>
+                    <td>Ada Lovelace (AD102)</td>
+                    <td class="mono blue">18,176</td>
+                    <td class="mono">142</td>
+                    <td>48 GB GDDR6X</td>
+                    <td class="mono blue">~6.5 B k/s</td>
+                </tr>
+                <tr>
+                    <td class="mono blue">RTX 4090</td>
+                    <td>Ada Lovelace (AD102)</td>
+                    <td class="mono blue">16,384</td>
+                    <td class="mono">128</td>
+                    <td>24 GB GDDR6X</td>
+                    <td class="mono blue">~5.5 B k/s</td>
+                </tr>
+                <tr>
+                    <td class="mono">RTX 4080</td>
+                    <td>Ada Lovelace (AD103)</td>
+                    <td class="mono">9,728</td>
+                    <td class="mono">76</td>
+                    <td>16 GB GDDR6X</td>
+                    <td class="mono">~3.5 B k/s</td>
+                </tr>
+                <tr>
+                    <td class="mono amber">RTX A6000</td>
+                    <td>Ampere (GA102)</td>
+                    <td class="mono amber">10,752</td>
+                    <td class="mono">84</td>
+                    <td>48 GB GDDR6</td>
+                    <td class="mono amber">~3.5 B k/s</td>
+                </tr>
+                <tr>
+                    <td class="mono amber">RTX 3090</td>
+                    <td>Ampere (GA102)</td>
+                    <td class="mono amber">10,496</td>
+                    <td class="mono">82</td>
+                    <td>24 GB GDDR6X</td>
+                    <td class="mono amber">~2.0 B k/s</td>
+                </tr>
+                <tr>
+                    <td class="mono" style="color: var(--accent-purple)">H100</td>
+                    <td>Hopper (GH100)</td>
+                    <td class="mono" style="color: var(--accent-purple)">16,896</td>
+                    <td class="mono">132</td>
+                    <td>80 GB HBM3</td>
+                    <td class="mono" style="color: var(--accent-purple)">~10.0 B k/s</td>
+                </tr>
+                <tr>
+                    <td class="mono" style="color: var(--accent-purple)">B200</td>
+                    <td>Blackwell (GB200)</td>
+                    <td class="mono" style="color: var(--accent-purple)">18,432</td>
+                    <td class="mono">144</td>
+                    <td>192 GB HBM3e</td>
+                    <td class="mono" style="color: var(--accent-purple)">~12.0 B k/s</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</section>
+
+<!-- Footer -->
+<footer class="footer">
+    <div class="container">
+        <p>Bitcoin Puzzle Hunter — GPU Architecture Documentation</p>
+        <p style="margin-top: 4px; font-size: 12px;">Generated Nov 2026 • Engine v2.0 • Rust + Axum + React + PostgreSQL + CUDA</p>
+    </div>
+</footer>
+
+<script>
+    // Animate bars on scroll
+    const observer = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            if (entry.isIntersecting) {
+                entry.target.querySelectorAll('.chart-bar-fill, .speed-bar-fill').forEach(bar => {
+                    bar.style.transition = 'width 2s cubic-bezier(0.4, 0, 0.2, 1)';
+                });
+            }
+        });
+    }, { threshold: 0.3 });
+
+    document.querySelectorAll('.chart-container, .speed-card').forEach(el => observer.observe(el));
+</script>
+
+</body>
+</html>
+

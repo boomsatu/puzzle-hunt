@@ -4,7 +4,7 @@ use num_bigint::BigUint;
 use num_traits::{Num, One};
 use sqlx::{PgPool, Row};
 
-pub use models::{CreatePuzzleDto, FoundKey, Puzzle, ScannedWindow, UpdatePuzzleDto};
+pub use models::{CreatePuzzleDto, FoundKey, NewScannedWindow, Puzzle, ScannedWindow, UpdatePuzzleDto};
 
 /// Inisialisasi skema tabel PostgreSQL dan data awal (seeds) jika belum ada
 pub async fn init_db(pool: &PgPool) -> Result<(), sqlx::Error> {
@@ -244,6 +244,7 @@ pub async fn mark_puzzle_solved(
     Ok(())
 }
 
+#[allow(dead_code)]
 pub async fn record_scanned_window(
     pool: &PgPool,
     puzzle_number: i32,
@@ -267,6 +268,33 @@ pub async fn record_scanned_window(
     .bind(duration_secs)
     .execute(pool)
     .await?;
+    Ok(())
+}
+
+/// Menyimpan seluruh window yang telah discan dalam satu ronde secara BATCH INSERT.
+/// Mengurangi beban koneksi dan round-trip network/disk I/O pada PostgreSQL secara signifikan.
+pub async fn record_scanned_windows_batch(
+    pool: &PgPool,
+    records: &[NewScannedWindow],
+) -> Result<(), sqlx::Error> {
+    if records.is_empty() {
+        return Ok(());
+    }
+
+    let mut query_builder: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(
+        "INSERT INTO scanned_windows (puzzle_number, window_id, range_start_hex, range_end_hex, keys_checked, duration_secs) "
+    );
+
+    query_builder.push_values(records, |mut b, rec| {
+        b.push_bind(rec.puzzle_number)
+            .push_bind(rec.window_id)
+            .push_bind(&rec.range_start_hex)
+            .push_bind(&rec.range_end_hex)
+            .push_bind(rec.keys_checked)
+            .push_bind(rec.duration_secs);
+    });
+
+    query_builder.build().execute(pool).await?;
     Ok(())
 }
 

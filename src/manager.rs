@@ -311,10 +311,17 @@ fn get_optimal_workers(states: &Arc<Mutex<HashMap<i32, HunterState>>>, mode: Dev
 
     match mode {
         DeviceMode::Local => {
-            // Mode Local: Sisakan 2 core untuk OS + Postgres + UI desktop (aman & stabil)
+            // Mode Local: Sisakan core untuk OS + Postgres + UI desktop (aman & stabil)
+            // Mendukung konfigurasi LOCAL_WORKERS di .env (default: 6 worker agar suhu laptop adem & terhindar dari thermal throttling)
+            let max_local = std::env::var("LOCAL_WORKERS")
+                .or_else(|_| std::env::var("MAX_WORKERS"))
+                .ok()
+                .and_then(|v| v.trim().parse::<usize>().ok())
+                .unwrap_or(6);
+
             let compute_budget = total_cpus.saturating_sub(2).max(1);
             let per_puzzle = compute_budget / running_count;
-            per_puzzle.clamp(1, 8)
+            per_puzzle.clamp(1, max_local)
         }
         DeviceMode::Vps => {
             // Mode VPS: Sisakan hanya 1 core untuk OS + PostgreSQL + Web API
@@ -612,6 +619,7 @@ async fn run_hunt_loop(
 
         let mut hit_result = None;
         let mut batch_keys: u64 = 0;
+        let mut db_records = Vec::with_capacity(batch_results.len());
 
         for task_res in batch_results {
             let (win_id, ws, we, res) = match task_res {
@@ -621,22 +629,27 @@ async fn run_hunt_loop(
 
             batch_keys += res.keys_checked;
 
-            // Simpan window yang discan ke PostgreSQL
+            // Kumpulkan seluruh window yang discan pada ronde ini ke memory buffer
             let s_hex = format!("0x{:x}", ws);
             let e_hex = format!("0x{:x}", we);
-            let _ = db::record_scanned_window(
-                &pool,
-                puzzle_num,
-                win_id,
-                &s_hex,
-                &e_hex,
-                res.keys_checked as i64,
-                res.elapsed_secs,
-            )
-            .await;
+            db_records.push(db::NewScannedWindow {
+                puzzle_number: puzzle_num,
+                window_id: win_id,
+                range_start_hex: s_hex,
+                range_end_hex: e_hex,
+                keys_checked: res.keys_checked as i64,
+                duration_secs: res.elapsed_secs,
+            });
 
             if res.found && hit_result.is_none() {
                 hit_result = Some(res);
+            }
+        }
+
+        // BATCH INSERT: Simpan seluruh window ronde ini dalam 1 query transaksi cepat ke PostgreSQL!
+        if !db_records.is_empty() {
+            if let Err(e) = db::record_scanned_windows_batch(&pool, &db_records).await {
+                tracing::warn!("⚠️ [DB BATCH] Gagal menyimpan batch scanned windows ke PostgreSQL: {e}");
             }
         }
 
@@ -781,6 +794,15 @@ async fn run_hunt_loop(
                 update_status(&states, puzzle_num, HunterStatus::SolvedByOther);
                 tracing::warn!("🛑 Puzzle #{} telah solved oleh orang lain di on-chain!", puzzle_num);
                 break;
+            }
+        }
+
+        // Opsional jeda istirahat CPU antar ronde jika diatur di .env (misal 50ms-100ms untuk laptop cooling)
+        if let Ok(delay_str) = std::env::var("ROUND_DELAY_MS") {
+            if let Ok(ms) = delay_str.trim().parse::<u64>() {
+                if ms > 0 {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(ms)).await;
+                }
             }
         }
 

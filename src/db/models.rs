@@ -51,6 +51,16 @@ pub struct ScannedWindow {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone)]
+pub struct NewScannedWindow {
+    pub puzzle_number: i32,
+    pub window_id: i64,
+    pub range_start_hex: String,
+    pub range_end_hex: String,
+    pub keys_checked: i64,
+    pub duration_secs: f64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct FoundKey {
     pub id: i32,

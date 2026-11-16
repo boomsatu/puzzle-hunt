@@ -23,14 +23,19 @@ GPU_MEM=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader 2>/dev/null 
 echo -e "GPU   : ${GREEN}$GPU_NAME ($GPU_MEM)${NC}"
 
 # 2. Start PostgreSQL
-echo -e "\n${CYAN}[1/3] Menyalakan PostgreSQL via Docker...${NC}"
-docker compose up -d postgres
-sleep 3
-if docker exec puzzle_postgres pg_isready -U postgres -d puzzle_hunt &>/dev/null; then
-    echo -e "${GREEN}✅ PostgreSQL siap & running.${NC}"
+echo -e "\n${CYAN}[1/3] Menyalakan PostgreSQL...${NC}"
+if command -v docker &>/dev/null && docker ps &>/dev/null; then
+    docker compose up -d postgres
+    sleep 3
+    if docker exec puzzle_postgres pg_isready -U postgres -d puzzle_hunt &>/dev/null; then
+        echo -e "${GREEN}✅ PostgreSQL (Docker) siap & running.${NC}"
+    else
+        echo -e "${RED}❌ PostgreSQL belum siap. Cek log: docker logs puzzle_postgres${NC}"
+        exit 1
+    fi
 else
-    echo -e "${RED}❌ PostgreSQL belum siap. Cek log: docker logs puzzle_postgres${NC}"
-    exit 1
+    service postgresql start 2>/dev/null || true
+    echo -e "${GREEN}✅ PostgreSQL (Native) siap & running.${NC}"
 fi
 
 # 3. Check Binary

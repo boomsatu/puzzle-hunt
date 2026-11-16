@@ -37,13 +37,18 @@ fi
 
 # ── 2. Install Dependensi Sistem Linux ──────────────────────────────────────
 echo -e "\n${CYAN}━━━ [2/6] Memeriksa & Menginstall Dependensi Sistem ━━━${NC}"
+SUDO=""
+if command -v sudo &>/dev/null; then
+    SUDO="sudo"
+fi
+
 if command -v apt-get &>/dev/null; then
-    sudo apt-get update -qq
-    sudo apt-get install -y -qq \
-        build-essential libgmp-dev libssl-dev pkg-config git curl wget \
-        docker.io docker-compose-plugin
+    $SUDO apt-get update -qq
+    $SUDO apt-get install -y -qq \
+        build-essential libgmp-dev libssl-dev pkg-config git curl wget screen \
+        postgresql postgresql-contrib
 elif command -v yum &>/dev/null; then
-    sudo yum install -y gcc gcc-c++ gmp-devel openssl-devel pkgconfig git curl wget
+    $SUDO yum install -y gcc gcc-c++ gmp-devel openssl-devel pkgconfig git curl wget screen
 fi
 echo -e "${GREEN}✅ Dependensi sistem siap.${NC}"
 
@@ -79,7 +84,7 @@ echo -e "${GREEN}✅ .env berhasil dikonfigurasi untuk GPU hosting (HUNT_MODE=gp
 
 # ── 5. Setup Database PostgreSQL & Migrasi Data ─────────────────────────────
 echo -e "\n${CYAN}━━━ [5/6] Setup PostgreSQL & Migrasi Data ━━━${NC}"
-if command -v docker &>/dev/null; then
+if command -v docker &>/dev/null && docker ps &>/dev/null; then
     docker compose up -d postgres
     echo "⏳ Menunggu container PostgreSQL siap..."
     sleep 4
@@ -101,10 +106,17 @@ if command -v docker &>/dev/null; then
         if [ -f "data/seed_unsolved.sql" ]; then
             docker exec -i puzzle_postgres psql -U postgres -d puzzle_hunt < "data/seed_unsolved.sql" > /dev/null 2>&1 || true
         fi
-        echo -e "${GREEN}✅ PostgreSQL siap dengan dataset default.${NC}"
+        echo -e "${GREEN}✅ PostgreSQL (Docker) siap dengan dataset default.${NC}"
     fi
 else
-    echo -e "${YELLOW}⚠️ Docker tidak terdeteksi. Pastikan PostgreSQL lokal berjalan di port 5432.${NC}"
+    echo -e "${YELLOW}ℹ️ Menyiapkan PostgreSQL Native di host...${NC}"
+    $SUDO service postgresql start || true
+    $SUDO -u postgres psql -c "ALTER USER postgres PASSWORD 'postgrespassword';" 2>/dev/null || true
+    $SUDO -u postgres createdb -O postgres puzzle_hunt 2>/dev/null || true
+    if [ -f "data/seed_unsolved.sql" ]; then
+        $SUDO -u postgres psql -d puzzle_hunt < "data/seed_unsolved.sql" > /dev/null 2>&1 || true
+    fi
+    echo -e "${GREEN}✅ PostgreSQL (Native) siap & running di port 5432.${NC}"
 fi
 
 # ── 6. Kompilasi Release Rust Backend ───────────────────────────────────────

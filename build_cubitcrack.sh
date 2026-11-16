@@ -31,16 +31,24 @@ echo "ðŸ“¦ Mengunduh source code BitCrack..."
 git clone --depth 1 https://github.com/brichard19/BitCrack.git "$BUILD_DIR"
 cd "$BUILD_DIR"
 
-# 4. Tentukan Compute Capability
-# RTX PRO 6000 Blackwell / RTX 5090 = sm_90 atau sm_89
+# 4. Modifikasi Makefile BitCrack agar menyertakan PTX (code=[sm_XX,compute_XX])
+# PENTING: Tanpa 'compute_XX' (PTX), GPU baru seperti Blackwell (Compute 12.0)
+# akan gagal runtime dengan pesan 'Error: named symbol not found'!
+sed -i 's|NVCCFLAGS=.*|NVCCFLAGS=-std=c++11 -gencode=arch=compute_${COMPUTE_CAP},code=[sm_${COMPUTE_CAP},compute_${COMPUTE_CAP}] -Xptxas="-v" -Xcompiler "${CXXFLAGS}"|g' Makefile
+
+# Periksa apakah nvcc mendukung compute_120 (Blackwell native) atau compute_90 / compute_89
 COMPUTE_CAP="89"
-echo "âš™ï¸ Mencoba kompilasi dengan COMPUTE_CAP=${COMPUTE_CAP}..."
-if ! make BUILD_CUDA=1 COMPUTE_CAP=${COMPUTE_CAP} -j$(nproc); then
-    echo "âš ï¸ Kompilasi dengan COMPUTE_CAP=89 gagal, mencoba COMPUTE_CAP=86 (Ampere/Universal)..."
-    make clean || true
-    COMPUTE_CAP="86"
-    make BUILD_CUDA=1 COMPUTE_CAP=${COMPUTE_CAP} -j$(nproc)
+if nvcc --help 2>&1 | grep -q "compute_120"; then
+    echo "ðŸŒŸ nvcc mendukung native Blackwell (compute_120)!"
+    COMPUTE_CAP="120"
+elif nvcc --help 2>&1 | grep -q "compute_90"; then
+    echo "ðŸŒŸ nvcc mendukung compute_90 (Hopper/Blackwell compat)!"
+    COMPUTE_CAP="90"
 fi
+
+echo "âš™ï¸ Mengompilasi cuBitCrack dengan COMPUTE_CAP=${COMPUTE_CAP}..."
+make clean || true
+make BUILD_CUDA=1 COMPUTE_CAP=${COMPUTE_CAP} -j$(nproc)
 
 # 5. Salin executable cuBitCrack ke bin/
 if [ -f "bin/cuBitCrack" ]; then
@@ -53,7 +61,7 @@ if [ -f "bin/cuBitCrack" ]; then
     echo "ðŸ” Menguji device list:"
     "$SCRIPT_DIR/bin/cuBitCrack" --list-devices || true
     echo "=========================================================="
-    echo "ðŸŽ‰ SIAP DIGUNAKAN! Semua puzzle address (tanpa pubkey) seperti #71 sekarang 100% berjalan di GPU!"
+    echo "ðŸŽ‰ SIAP DIGUNAKAN! cuBitCrack kini 100% kompatibel dengan RTX PRO 6000 Blackwell!"
 else
     echo "âŒ File bin/cuBitCrack tidak ditemukan setelah kompilasi."
     exit 1

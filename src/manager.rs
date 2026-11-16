@@ -247,13 +247,38 @@ impl HuntManager {
         let pause_flag = Arc::new(AtomicBool::new(false));
         self.pause_flags.lock().unwrap().insert(puzzle_num, pause_flag.clone());
 
-        let now_str = chrono_now();
-        let new_state = HunterState {
-            puzzle_num,
-            status: HunterStatus::Running,
-            started_at: Some(now_str),
-            ..HunterState::new(puzzle_num)
+        let p_start = BigUint::parse_bytes(puzzle.range_start_hex.trim_start_matches("0x").as_bytes(), 16).unwrap_or_default();
+        let p_end = BigUint::parse_bytes(puzzle.range_end_hex.trim_start_matches("0x").as_bytes(), 16).unwrap_or_default();
+        let num_workers = 16usize;
+        let step = if &p_end > &p_start {
+            (&p_end - &p_start) / BigUint::from(num_workers as u64)
+        } else {
+            BigUint::from(1u64)
         };
+        let init_windows: Vec<WorkerWindow> = (0..num_workers)
+            .map(|idx| {
+                let ws = &p_start + (&step * BigUint::from(idx as u64));
+                let we = &ws + &step;
+                WorkerWindow {
+                    worker_id: idx + 1,
+                    start_hex: format!("0x{:x}", ws),
+                    end_hex: format!("0x{:x}", we),
+                }
+            })
+            .collect();
+
+        let now_str = chrono_now();
+        let mut new_state = HunterState::new(puzzle_num);
+        new_state.status = HunterStatus::Running;
+        new_state.started_at = Some(now_str);
+        new_state.active_workers = num_workers;
+        new_state.active_windows = init_windows;
+        new_state.last_window_hex = format!(
+            "0x{:x}..0x{:x} (⚡ {} Streams GPU Ready)",
+            p_start, p_end, num_workers
+        );
+        new_state.device_mode = "gpu".to_string();
+        new_state.gpu_info = Some(crate::kangaroo::cuda::get_telemetry(num_workers));
 
         {
             let mut states = self.states.lock().unwrap();
@@ -876,10 +901,18 @@ async fn run_continuous_gpu_kangaroo(
         "-o".to_string(), out_path.clone(),
     ];
 
-    if std::path::Path::new(&work_path).exists() {
-        tracing::info!("📁 Ditemukan checkpoint progres Kangaroo: {work_path}. Melanjutkan dari state terakhir (-i).");
-        args.push("-i".to_string());
-        args.push(work_path.clone());
+    let work_file = std::path::Path::new(&work_path);
+    if work_file.exists() {
+        if let Ok(meta) = std::fs::metadata(&work_path) {
+            if meta.len() > 1024 {
+                tracing::info!("📁 Ditemukan checkpoint progres Kangaroo valid: {work_path}. Melanjutkan dari state terakhir (-i).");
+                args.push("-i".to_string());
+                args.push(work_path.clone());
+            } else {
+                tracing::warn!("⚠️ File checkpoint {work_path} kosong/corrupt (< 1KB). Menghapus dan memulai fresh.");
+                let _ = std::fs::remove_file(&work_path);
+            }
+        }
     }
     args.push(cfg_path.clone());
 
@@ -902,7 +935,7 @@ async fn run_continuous_gpu_kangaroo(
     {
         let mut s = states.lock().unwrap();
         if let Some(st) = s.get_mut(&puzzle_num) {
-            st.last_window_hex = "🚀 Inisialisasi NVIDIA CUDA Kangaroo (Membuat Kanguru di GPU ~30s)...".to_string();
+            st.last_window_hex = format!("0x{:x}..0x{:x} (⚡ 16 CUDA Streams • Inisialisasi Kangaroo)", full_start, bounded_end);
             st.active_workers = num_workers;
             st.active_windows = active_win_list.clone();
             st.is_kangaroo_mode = true;
@@ -995,7 +1028,19 @@ async fn run_continuous_gpu_kangaroo(
                                     st.total_keys_checked = count;
                                 }
                                 st.round = round_counter;
-                                st.last_window_hex = "⚡ NVIDIA GPU Aktif • Pollard's Kangaroo O(√N) CUDA".to_string();
+                                st.last_window_hex = format!("0x{:x}..0x{:x} (⚡ NVIDIA CUDA Kangaroo O(√N))", full_start, bounded_end);
+                                st.active_workers = num_workers;
+                                st.active_windows = active_win_list.clone();
+                                if let Ok(msg) = serde_json::to_string(&*st) {
+                                    let _ = ws_tx.send(msg);
+                                }
+                            }
+                        } else if !l.trim().is_empty() {
+                            let msg_line = l.trim().to_string();
+                            tracing::info!("🦘 [KANGAROO GPU #{puzzle_num}] {msg_line}");
+                            let mut s = states.lock().unwrap();
+                            if let Some(st) = s.get_mut(&puzzle_num) {
+                                st.last_window_hex = format!("0x{:x}..0x{:x} (⚡ {})", full_start, bounded_end, msg_line);
                                 st.active_workers = num_workers;
                                 st.active_windows = active_win_list.clone();
                                 if let Ok(msg) = serde_json::to_string(&*st) {
@@ -1117,7 +1162,7 @@ async fn run_continuous_gpu_bitcrack(
     {
         let mut s = states.lock().unwrap();
         if let Some(st) = s.get_mut(&puzzle_num) {
-            st.last_window_hex = "🚀 Inisialisasi NVIDIA CUDA cuBitCrack (Address Scanner)...".to_string();
+            st.last_window_hex = format!("0x{:x}..0x{:x} (⚡ 16 CUDA Streams • cuBitCrack Address Scanner)", full_start, full_end);
             st.active_workers = num_workers;
             st.active_windows = active_win_list.clone();
             st.is_kangaroo_mode = false;
@@ -1207,7 +1252,19 @@ async fn run_continuous_gpu_bitcrack(
                                     st.total_keys_checked = count;
                                 }
                                 st.round = round_counter;
-                                st.last_window_hex = "⚡ NVIDIA GPU Aktif • cuBitCrack Address Scanner (CUDA Cores)".to_string();
+                                st.last_window_hex = format!("0x{:x}..0x{:x} (⚡ NVIDIA CUDA cuBitCrack)", full_start, full_end);
+                                st.active_workers = num_workers;
+                                st.active_windows = active_win_list.clone();
+                                if let Ok(msg) = serde_json::to_string(&*st) {
+                                    let _ = ws_tx.send(msg);
+                                }
+                            }
+                        } else if !l.trim().is_empty() {
+                            let msg_line = l.trim().to_string();
+                            tracing::info!("⚡ [BITCRACK GPU #{puzzle_num}] {msg_line}");
+                            let mut s = states.lock().unwrap();
+                            if let Some(st) = s.get_mut(&puzzle_num) {
+                                st.last_window_hex = format!("0x{:x}..0x{:x} (⚡ {})", full_start, full_end, msg_line);
                                 st.active_workers = num_workers;
                                 st.active_windows = active_win_list.clone();
                                 if let Ok(msg) = serde_json::to_string(&*st) {

@@ -692,7 +692,13 @@ async fn run_hunt_loop(
                         if let Some(bin) = crate::kangaroo::cuda::find_cuda_address_solver() {
                             let gpu_count = crate::kangaroo::cuda::get_gpu_count();
                             let assigned_gpu = w_idx % gpu_count;
-                            let sm_blocks = crate::kangaroo::cuda::get_optimal_bitcrack_blocks(assigned_gpu);
+                            let workers_per_gpu = (num_workers / gpu_count).max(1);
+                            let total_sm = crate::kangaroo::cuda::get_optimal_bitcrack_blocks(assigned_gpu);
+                            // Bagi total SM GPU secara adil ke setiap worker pada GPU ini
+                            // Contoh 32 worker di Dual RTX 5090: 16 worker/GPU -> 170/16 = 10 blocks/worker!
+                            // Efek: Alokasi VRAM menciut dari 1.5GB ke ~100MB per worker, starting points hanya 655K,
+                            // dan 32 worker berjalan serentak TANPA BEREBUT SM ATAU MEMORI!
+                            let sm_blocks = (total_sm / (workers_per_gpu as u32)).clamp(4, total_sm);
                             let res = crate::kangaroo::cuda::run_cuda_bitcrack_window(
                                 &bin,
                                 &p_addr,

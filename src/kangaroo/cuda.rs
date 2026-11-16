@@ -392,8 +392,12 @@ pub fn run_cuda_bitcrack_window(
     let out_file = format!("data/found_bitcrack_{}_{}.txt", std::process::id(), unique_id);
 
     let mut cmd = Command::new(solver_bin);
+    // Isolasi proses ke satu GPU fisik via CUDA_VISIBLE_DEVICES
+    // agar CUDA context tidak diinisialisasi ganda di GPU lain (menghemat 50% VRAM & hilangkan lock contention)
+    cmd.env("CUDA_DEVICE_ORDER", "PCI_BUS_ID");
+    cmd.env("CUDA_VISIBLE_DEVICES", gpu_id.to_string());
     cmd.args([
-        "-d", &gpu_id.to_string(),
+        "-d", "0", // Di dalam proses yang terisolasi, device ID selalu 0
         "-b", &sm_blocks.to_string(),
         "-t", "256",
         "-p", "256",

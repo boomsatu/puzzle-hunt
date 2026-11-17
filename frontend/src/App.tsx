@@ -40,6 +40,7 @@ import {
 import { PuzzleCard } from './components/PuzzleCard';
 import { AddPuzzleModal } from './components/AddPuzzleModal';
 import { FoundKeysModal } from './components/FoundKeysModal';
+import { MaraSweepModal } from './components/MaraSweepModal';
 import { CelebrationModal } from './components/CelebrationModal';
 import { PuzzleDetailPage } from './components/PuzzleDetailPage';
 import { TelegramModal } from './components/TelegramModal';
@@ -58,6 +59,7 @@ export const App: React.FC = () => {
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isFoundModalOpen, setIsFoundModalOpen] = useState(false);
   const [isTelegramModalOpen, setIsTelegramModalOpen] = useState(false);
+  const [isMaraSweepOpen, setIsMaraSweepOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [dbConnected, setDbConnected] = useState(true);
   const [wsConnected, setWsConnected] = useState(false);
@@ -461,6 +463,15 @@ export const App: React.FC = () => {
             >
               <Bot className="w-4 h-4" />
               <span>Telegram Alert</span>
+            </button>
+
+            <button
+              onClick={() => setIsMaraSweepOpen(true)}
+              className="px-3.5 py-2 bg-orange-500/10 hover:bg-orange-500/20 text-orange-400 border border-orange-500/30 rounded-xl text-xs font-semibold flex items-center gap-2 transition"
+              title="Manual & Saved Key MARA Slipstream Sweep"
+            >
+              <Zap className="w-4 h-4 text-orange-400" />
+              <span>MARA Sweep</span>
             </button>
 
             <button
@@ -995,6 +1006,15 @@ export const App: React.FC = () => {
       <TelegramModal
         isOpen={isTelegramModalOpen}
         onClose={() => setIsTelegramModalOpen(false)}
+      />
+      <MaraSweepModal
+        isOpen={isMaraSweepOpen}
+        onClose={() => setIsMaraSweepOpen(false)}
+        destinationAddress={destinationAddress}
+        onSuccess={() => {
+          refreshAll();
+          fetchFoundKeys();
+        }}
       />
       {activeCelebrationPuzzle !== null && (
         <CelebrationModal

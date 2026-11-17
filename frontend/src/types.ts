@@ -388,4 +388,56 @@ export function parseWindowHexRange(windowStr: string | undefined | null): { sta
   return { startHex: clean };
 }
 
+// ==============================================================================
+// ⚡ MARA SLIPSTREAM MANUAL SWEEP & SAVED KEYS TYPES
+// ==============================================================================
+
+export interface SavedKeyItem {
+  id?: number | null;
+  puzzle_number: number;
+  address: string;
+  private_key_hex: string;
+  private_key_dec: string;
+  wif: string;
+  txid?: string | null;
+  found_at: string;
+  source: 'database' | 'file_backup' | string;
+  file_name?: string | null;
+}
+
+export interface SweepPreview {
+  success: boolean;
+  source_address: string;
+  destination_address: string;
+  balance_sats: number;
+  balance_btc: number;
+  utxo_count: number;
+  estimated_fee_sats: number;
+  estimated_fee_btc: number;
+  fee_rate_sat_vb: number;
+  net_send_sats: number;
+  net_send_btc: number;
+  has_balance: boolean;
+  can_sweep: boolean;
+  message: string;
+}
+
+export interface ManualSweepResult {
+  success: boolean;
+  txid: string;
+  raw_tx_hex: string;
+  source_address: string;
+  destination_address: string;
+  amount_sats: number;
+  amount_btc: number;
+  fee_sats: number;
+  fee_btc: number;
+  fee_rate_sat_vb: number;
+  is_mara_accepted: boolean;
+  broadcast_target: string;
+  explorer_url: string;
+  message: string;
+}
+
+
 

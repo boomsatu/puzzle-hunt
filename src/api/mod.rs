@@ -61,6 +61,10 @@ pub fn create_router(manager: SharedManager) -> Router {
         .route("/api/hunt/status", get(all_hunt_status))
         // Found Keys (PostgreSQL)
         .route("/api/found", get(list_found_keys))
+        // MARA Slipstream Manual & Saved Sweep
+        .route("/api/mara/keys", get(list_mara_keys))
+        .route("/api/mara/preview", post(preview_mara_sweep))
+        .route("/api/mara/sweep", post(execute_mara_sweep))
         // Simulasi Kemenangan & Auto-Transfer Timeline
         .route("/api/hunt/:number/simulate_celebration", post(simulate_celebration))
         // Telegram Test
@@ -401,6 +405,119 @@ async fn test_telegram_alert() -> (StatusCode, Json<Value>) {
             StatusCode::BAD_REQUEST,
             Json(json!({ "success": false, "error": e })),
         ),
+    }
+}
+
+// ===== MARA SLIPSTREAM MANUAL SWEEP & SAVED KEYS HANDLERS =====
+
+async fn list_mara_keys(State(manager): State<SharedManager>) -> (StatusCode, Json<Value>) {
+    let keys = crate::transfer::get_all_saved_keys(&manager.pool).await;
+    (
+        StatusCode::OK,
+        Json(json!({
+            "success": true,
+            "count": keys.len(),
+            "keys": keys,
+        })),
+    )
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct MaraPreviewRequest {
+    #[allow(dead_code)]
+    pub source_type: String, // "manual" | "saved_key"
+    pub private_key: Option<String>,
+    pub destination_address: Option<String>,
+    pub priority_fee_rate: Option<u64>,
+}
+
+async fn preview_mara_sweep(
+    State(_manager): State<SharedManager>,
+    Json(payload): Json<MaraPreviewRequest>,
+) -> (StatusCode, Json<Value>) {
+    let dst_address = payload.destination_address
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| std::env::var("DEFAULT_DESTINATION_ADDRESS").ok())
+        .unwrap_or_else(|| "bc1qz08nklntedluzzr9w0g3qhxrkvytayentqdshc".to_string());
+
+    let key_str = match payload.private_key {
+        Some(ref k) if !k.trim().is_empty() => k.clone(),
+        _ => return (StatusCode::BAD_REQUEST, Json(json!({ "success": false, "error": "Private key tidak boleh kosong" }))),
+    };
+
+    let priv_bytes = match crate::transfer::parse_any_private_key(&key_str) {
+        Ok(b) => b,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "success": false, "error": e }))),
+    };
+
+    match crate::transfer::preview_sweep(&priv_bytes, &dst_address, payload.priority_fee_rate).await {
+        Ok(preview) => (StatusCode::OK, Json(serde_json::to_value(preview).unwrap_or_default())),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "success": false, "error": e }))),
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct MaraSweepExecutionRequest {
+    #[allow(dead_code)]
+    pub source_type: String, // "manual" | "saved_key"
+    pub private_key: Option<String>,
+    pub puzzle_number: Option<i32>,
+    pub destination_address: Option<String>,
+    pub priority_fee_rate: Option<u64>,
+    pub mara_only: Option<bool>,
+}
+
+async fn execute_mara_sweep(
+    State(manager): State<SharedManager>,
+    Json(payload): Json<MaraSweepExecutionRequest>,
+) -> (StatusCode, Json<Value>) {
+    let dst_address = payload.destination_address
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| std::env::var("DEFAULT_DESTINATION_ADDRESS").ok())
+        .unwrap_or_else(|| "bc1qz08nklntedluzzr9w0g3qhxrkvytayentqdshc".to_string());
+
+    let key_str = match payload.private_key {
+        Some(ref k) if !k.trim().is_empty() => k.clone(),
+        _ => return (StatusCode::BAD_REQUEST, Json(json!({ "success": false, "error": "Private key tidak boleh kosong" }))),
+    };
+
+    let priv_bytes = match crate::transfer::parse_any_private_key(&key_str) {
+        Ok(b) => b,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "success": false, "error": e }))),
+    };
+
+    let mara_only = payload.mara_only.unwrap_or(true);
+    let p_num = payload.puzzle_number;
+
+    match crate::transfer::execute_manual_mara_sweep(&priv_bytes, &dst_address, payload.priority_fee_rate, mara_only, p_num).await {
+        Ok(res) => {
+            // Jika sweep berhasil, kirim juga notifikasi ke Telegram!
+            let priv_hex = hex::encode(priv_bytes);
+            let priv_dec = num_bigint::BigUint::from_bytes_be(&priv_bytes).to_string();
+            let wif = crate::transfer::priv_to_wif(&priv_bytes);
+            let puzzle_num_val = p_num.unwrap_or(71);
+            let _ = crate::notify::send_telegram_alert(
+                puzzle_num_val,
+                71,
+                &res.source_address,
+                &priv_hex,
+                &priv_dec,
+                &wif,
+                Some(&res.txid),
+                None,
+            ).await;
+
+            // Catat txid ke PostgreSQL found_keys jika ada record yang cocok
+            let _ = sqlx::query("UPDATE found_keys SET txid = $1 WHERE private_key_hex = $2 OR address = $3")
+                .bind(&res.txid)
+                .bind(&priv_hex)
+                .bind(&res.source_address)
+                .execute(&manager.pool)
+                .await;
+
+            (StatusCode::OK, Json(serde_json::to_value(res).unwrap_or_default()))
+        }
+        Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "success": false, "error": e }))),
     }
 }
 

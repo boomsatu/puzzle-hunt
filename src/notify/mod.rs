@@ -59,7 +59,11 @@ pub async fn send_telegram_alert(
         .build()
         .unwrap_or_default();
 
-    let url = format!("https://api.telegram.org/bot{bot_token}/sendMessage");
+    let api_base = std::env::var("TELEGRAM_API_URL")
+        .unwrap_or_else(|_| "https://api.telegram.org".to_string())
+        .trim_end_matches('/')
+        .to_string();
+    let url = format!("{api_base}/bot{bot_token}/sendMessage");
     let payload = json!({
         "chat_id": chat_id,
         "text": message,
@@ -108,7 +112,11 @@ pub async fn send_test_alert() -> Result<String, String> {
         .build()
         .unwrap_or_default();
 
-    let url = format!("https://api.telegram.org/bot{bot_token}/sendMessage");
+    let api_base = std::env::var("TELEGRAM_API_URL")
+        .unwrap_or_else(|_| "https://api.telegram.org".to_string())
+        .trim_end_matches('/')
+        .to_string();
+    let url = format!("{api_base}/bot{bot_token}/sendMessage");
     let payload = json!({
         "chat_id": chat_id,
         "text": message,

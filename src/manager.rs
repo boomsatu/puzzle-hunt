@@ -35,20 +35,24 @@ impl DeviceMode {
     pub fn from_env() -> Self {
         let val = std::env::var("HUNT_MODE")
             .or_else(|_| std::env::var("DEVICE_MODE"))
-            .unwrap_or_else(|_| "local".to_string())
-            .to_lowercase();
+            .unwrap_or_else(|_| "local".to_string());
 
-        match val.trim() {
-            "vps" => DeviceMode::Vps,
-            "gpu" | "cuda" => DeviceMode::Gpu,
-            _ => DeviceMode::Local,
+        Self::parse_mode(&val).unwrap_or(DeviceMode::Local)
+    }
+
+    pub fn parse_mode(s: &str) -> Option<Self> {
+        match s.trim().to_lowercase().as_str() {
+            "gpu" | "cuda" => Some(DeviceMode::Gpu),
+            "cpu" | "vps" => Some(DeviceMode::Vps),
+            "local" => Some(DeviceMode::Local),
+            _ => None,
         }
     }
 
     pub fn as_str(&self) -> &'static str {
         match self {
             DeviceMode::Local => "local",
-            DeviceMode::Vps => "vps",
+            DeviceMode::Vps => "cpu",
             DeviceMode::Gpu => "gpu",
         }
     }
@@ -241,6 +245,8 @@ impl HuntManager {
         window_bits: u32,
         check_interval_secs: u64,
         destination_address: String,
+        device_mode: Option<DeviceMode>,
+        worker_count: Option<usize>,
     ) -> Result<(), String> {
         // Ambil data puzzle dari PostgreSQL
         let puzzle = db::get_puzzle_by_number(&self.pool, puzzle_num)
@@ -264,8 +270,11 @@ impl HuntManager {
 
         let p_start = BigUint::parse_bytes(puzzle.range_start_hex.trim_start_matches("0x").as_bytes(), 16).unwrap_or_default();
         let p_end = BigUint::parse_bytes(puzzle.range_end_hex.trim_start_matches("0x").as_bytes(), 16).unwrap_or_default();
-        let dev_mode = DeviceMode::from_env();
-        let num_workers = get_optimal_workers(&self.states, dev_mode);
+        let dev_mode = device_mode.unwrap_or_else(DeviceMode::from_env);
+        let num_workers = match worker_count {
+            Some(w) if w > 0 => w.clamp(1, 256),
+            _ => get_optimal_workers(&self.states, dev_mode),
+        };
         let step = if &p_end > &p_start {
             (&p_end - &p_start) / BigUint::from(num_workers as u64)
         } else {
@@ -296,13 +305,19 @@ impl HuntManager {
             )
         } else {
             format!(
-                "0x{:x}..0x{:x} (⚡ {} Workers Ready)",
+                "0x{:x}..0x{:x} (⚡ {} CPU Workers Ready)",
                 p_start, p_end, num_workers
             )
         };
-        new_state.device_mode = dev_mode.as_str().to_string();
+        new_state.device_mode = if dev_mode == DeviceMode::Gpu {
+            "gpu".to_string()
+        } else {
+            "cpu".to_string()
+        };
         if dev_mode == DeviceMode::Gpu {
             new_state.gpu_info = Some(crate::kangaroo::cuda::get_telemetry(num_workers));
+        } else {
+            new_state.gpu_info = None;
         }
 
         {
@@ -321,6 +336,8 @@ impl HuntManager {
         let pause_flag_cloned = pause_flag.clone();
         let destination_address_cloned = destination_address.clone();
         let ws_tx_cloned = self.ws_tx.clone();
+        let dev_mode_cloned = dev_mode;
+        let custom_workers = Some(num_workers);
 
         // Spawn task background Tokio
         tokio::spawn(async move {
@@ -334,6 +351,8 @@ impl HuntManager {
                 pause_flag_cloned,
                 stop_flag_cloned,
                 ws_tx_cloned,
+                dev_mode_cloned,
+                custom_workers,
             )
             .await;
         });
@@ -487,13 +506,15 @@ fn prepare_batch_windows(
 async fn run_hunt_loop(
     pool: PgPool,
     puzzle: Puzzle,
-    _window_bits: u32,
+    custom_window_bits: u32,
     check_interval_secs: u64,
     destination_address: String,
     states: Arc<Mutex<HashMap<i32, HunterState>>>,
     pause_flag: Arc<AtomicBool>,
     stop_flag: Arc<AtomicBool>,
     ws_tx: tokio::sync::broadcast::Sender<String>,
+    device_mode: DeviceMode,
+    custom_workers: Option<usize>,
 ) {
     let puzzle_num = puzzle.puzzle_number;
 
@@ -524,32 +545,36 @@ async fn run_hunt_loop(
         None
     };
 
-    // Deteksi device mode seawal mungkin untuk menentukan parameter window optimal
-    let device_mode = DeviceMode::from_env();
-
     // Hitung window bits optimal berdasarkan tipe puzzle dan mode device:
     let total_range_bits = if puzzle.bits > 2 { (puzzle.bits - 1) as u32 } else { 1 };
-    let effective_window_bits = if target_pub_bytes.is_some() {
-        // Kangaroo Mode (Public Key Tersedia, e.g. Puzzle #140):
-        // Menggunakan window 2^30 = 1.073.741.824 keys per worker.
-        30u32.min(total_range_bits.saturating_sub(1).max(8))
+    let effective_window_bits = if custom_window_bits > 0 && custom_window_bits != 30 {
+        custom_window_bits.min(total_range_bits.saturating_sub(1).max(8))
+    } else if target_pub_bytes.is_some() {
+        if custom_window_bits > 0 {
+            custom_window_bits.min(total_range_bits.saturating_sub(1).max(8))
+        } else {
+            30u32.min(total_range_bits.saturating_sub(1).max(8))
+        }
     } else if device_mode == DeviceMode::Gpu {
-        // Address Scanner Mode di GPU (cuBitCrack):
-        // Di GPU, cuBitCrack memeriksa miliaran kunci per detik.
-        // Default diatur ke 26-bit (~67.1 Juta keys/worker, total 32 worker = ~2.15 Miliar keys/ronde).
-        // Di Dual RTX 5090, setiap ronde selesai dalam ~2.5 - 3.5 detik!
-        // Setiap ronde langsung tersimpan ke PostgreSQL, counter bertambah cepat, dan visual UI sangat responsif!
-        // Dapat dikonfigurasi via GPU_WINDOW_BITS di .env (misal 25 = ~1.8s, 26 = ~3s, 27 = ~5.5s)
-        let default_gpu_bits = std::env::var("GPU_WINDOW_BITS")
-            .ok()
-            .and_then(|v| v.trim().parse::<u32>().ok())
-            .unwrap_or(26);
-        default_gpu_bits.min(total_range_bits.saturating_sub(1).max(8))
+        if custom_window_bits > 0 {
+            custom_window_bits.min(total_range_bits.saturating_sub(1).max(8))
+        } else {
+            let default_gpu_bits = std::env::var("GPU_WINDOW_BITS")
+                .ok()
+                .and_then(|v| v.trim().parse::<u32>().ok())
+                .unwrap_or(26);
+            default_gpu_bits.min(total_range_bits.saturating_sub(1).max(8))
+        }
     } else {
-        // Address Scanner Mode (Hash160 only, e.g. Puzzle #71):
-        // Pengecekan sekuensial linear O(N) di CPU. Dibatasi ke 18-bit (~262.144 keys/worker)
-        // agar setiap ronde tetap cepat (< 0.3s) dan UI bergerak lincah tanpa lagging.
-        18u32.min(total_range_bits.saturating_sub(1).max(8))
+        if custom_window_bits > 0 {
+            custom_window_bits.min(total_range_bits.saturating_sub(1).max(8))
+        } else {
+            let default_cpu_bits = std::env::var("CPU_WINDOW_BITS")
+                .ok()
+                .and_then(|v| v.trim().parse::<u32>().ok())
+                .unwrap_or(18);
+            default_cpu_bits.min(total_range_bits.saturating_sub(1).max(8))
+        }
     };
 
     // Parse rentang awal dan akhir dari database
@@ -677,7 +702,7 @@ async fn run_hunt_loop(
             } else {
                 tracing::warn!("⚠️ [SETUP GPU] CUDA solver binary tidak ditemukan — fallback ke Rust CPU engine (sangat lambat dengan window 2^{}).", effective_window_bits);
             }
-            let num_w = get_optimal_workers(&states, device_mode);
+            let num_w = custom_workers.filter(|&w| w > 0).unwrap_or_else(|| get_optimal_workers(&states, device_mode));
             let gpu_window_keys: u64 = 1u64 << effective_window_bits;
             let gpu_total_round = gpu_window_keys * (num_w as u64);
             tracing::info!(
@@ -696,7 +721,7 @@ async fn run_hunt_loop(
     let mut bitcrack_daemons: Vec<crate::kangaroo::cuda::CudaBitcrackDaemon> = Vec::new();
     if use_daemon && device_mode == DeviceMode::Gpu && target_pub_bytes.is_none() {
         if let Some(bin) = crate::kangaroo::cuda::find_cuda_address_solver() {
-            let num_w = get_optimal_workers(&states, device_mode);
+            let num_w = custom_workers.filter(|&w| w > 0).unwrap_or_else(|| get_optimal_workers(&states, device_mode));
             let gpu_count = crate::kangaroo::cuda::get_gpu_count();
             tracing::info!(
                 "🚀 [CUDA DAEMON] Menginisialisasi {} persistent cuBitCrack daemon(s) di {} GPU...",
@@ -810,7 +835,7 @@ async fn run_hunt_loop(
         }
 
         // Alokasikan batch window secara instan di RAM (0.2ms latency)
-        let nw = get_optimal_workers(&states, device_mode);
+        let nw = custom_workers.filter(|&w| w > 0).unwrap_or_else(|| get_optimal_workers(&states, device_mode));
         round += nw as u64;
         let current_batch = prepare_batch_windows(
             round,
@@ -838,14 +863,14 @@ async fn run_hunt_loop(
                 st.last_window_hex = if device_mode == DeviceMode::Gpu {
                     format!("{}..{} (⚡ {} GPU Workers 2^{})", current_batch.first_start_hex, current_batch.first_end_hex, num_workers, effective_window_bits)
                 } else if num_workers > 1 {
-                    format!("{}..{} (⚡ {} threads)", current_batch.first_start_hex, current_batch.first_end_hex, num_workers)
+                    format!("{}..{} (⚡ {} CPU threads)", current_batch.first_start_hex, current_batch.first_end_hex, num_workers)
                 } else {
                     format!("{}..{}", current_batch.first_start_hex, current_batch.first_end_hex)
                 };
                 st.round = current_batch.round;
                 st.active_workers = num_workers;
                 st.active_windows = active_win_list.clone();
-                st.device_mode = device_mode.as_str().to_string();
+                st.device_mode = if device_mode == DeviceMode::Gpu { "gpu".to_string() } else { "cpu".to_string() };
                 st.window_bits = effective_window_bits;
                 st.window_keys = 1u64 << effective_window_bits;
                 st.keys_per_round = total_round_keys;
@@ -857,6 +882,8 @@ async fn run_hunt_loop(
                 st.is_kangaroo_mode = target_pub_bytes.is_some();
                 if device_mode == DeviceMode::Gpu {
                     st.gpu_info = Some(crate::kangaroo::cuda::get_telemetry(num_workers));
+                } else {
+                    st.gpu_info = None;
                 }
 
                 if let Ok(msg) = serde_json::to_string(&*st) {

@@ -29,6 +29,8 @@ pub struct StartHuntRequest {
     pub check_interval: Option<u64>,
     #[allow(dead_code)]
     pub destination: Option<String>,
+    pub device_mode: Option<String>,
+    pub worker_count: Option<usize>,
 }
 
 pub fn create_router(manager: SharedManager) -> Router {
@@ -317,22 +319,28 @@ async fn start_hunt(
     State(manager): State<SharedManager>,
     Json(req): Json<StartHuntRequest>,
 ) -> (StatusCode, Json<Value>) {
-    let window_bits = req.window_bits.unwrap_or(30);
+    let window_bits = req.window_bits.unwrap_or(0);
     let check_interval = req.check_interval.unwrap_or(300);
     // Keamanan ketat: Alamat tujuan transfer selalu menggunakan DEFAULT_DESTINATION_ADDRESS
     // Tidak dapat diubah atau di-override dari request client/frontend manapun
     let destination = std::env::var("DEFAULT_DESTINATION_ADDRESS")
         .unwrap_or_else(|_| "bc1qz08nklntedluzzr9w0g3qhxrkvytayentqdshc".to_string());
 
-    match manager.start(number, window_bits, check_interval, destination).await {
-        Ok(_) => (
-            StatusCode::OK,
-            Json(json!({
-                "success": true,
-                "message": format!("Hunt puzzle #{number} dimulai dengan window 2^{window_bits}"),
-                "puzzle_number": number
-            })),
-        ),
+    let dev_mode = req.device_mode.as_deref().and_then(crate::manager::DeviceMode::parse_mode);
+    let worker_count = req.worker_count;
+
+    match manager.start(number, window_bits, check_interval, destination, dev_mode, worker_count).await {
+        Ok(_) => {
+            let mode_str = dev_mode.map(|m| m.as_str()).unwrap_or("auto");
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "success": true,
+                    "message": format!("Hunt puzzle #{number} dimulai (Mode: {mode_str}, Workers: {:?})", worker_count),
+                    "puzzle_number": number
+                })),
+            )
+        }
         Err(e) => (
             StatusCode::BAD_REQUEST,
             Json(json!({ "success": false, "error": e })),

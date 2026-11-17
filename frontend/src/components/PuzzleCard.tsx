@@ -22,6 +22,7 @@ import {
   calculateRangePercentage,
   parseWindowHexRange,
 } from '../types';
+import { StartHuntModal } from './StartHuntModal';
 
 interface PuzzleCardProps {
   puzzle: Puzzle;
@@ -35,6 +36,7 @@ export const PuzzleCard: React.FC<PuzzleCardProps> = ({ puzzle, hunter, destinat
   const [windowBits, setWindowBits] = useState(30);
   const [loading, setLoading] = useState(false);
   const [copiedAddr, setCopiedAddr] = useState(false);
+  const [isStartModalOpen, setIsStartModalOpen] = useState(false);
 
   const isRunning = hunter?.status === 'Running';
   const isPausing = hunter?.status === 'Pausing';
@@ -122,10 +124,34 @@ export const PuzzleCard: React.FC<PuzzleCardProps> = ({ puzzle, hunter, destinat
                 MENJEDA...
               </span>
             ) : isRunning ? (
-              <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center gap-1.5 animate-pulse">
-                <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
-                RUNNING
-              </span>
+              <div className="flex items-center gap-1.5">
+                <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center gap-1.5 animate-pulse">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
+                  RUNNING
+                </span>
+                <span
+                  className={`px-2 py-0.5 rounded-full text-[10px] font-bold border flex items-center gap-1 ${
+                    hunter?.device_mode === 'gpu' || Boolean(hunter?.gpu_info)
+                      ? 'bg-purple-500/20 text-purple-300 border-purple-500/30'
+                      : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
+                  }`}
+                  title={
+                    hunter?.device_mode === 'gpu' || Boolean(hunter?.gpu_info)
+                      ? 'Berjalan di GPU (NVIDIA CUDA)'
+                      : 'Berjalan di CPU Server (Multi-Core)'
+                  }
+                >
+                  {hunter?.device_mode === 'gpu' || Boolean(hunter?.gpu_info) ? (
+                    <>
+                      <Zap className="w-2.5 h-2.5 text-purple-400" /> GPU
+                    </>
+                  ) : (
+                    <>
+                      <Cpu className="w-2.5 h-2.5 text-emerald-400" /> CPU
+                    </>
+                  )}
+                </span>
+              </div>
             ) : hunter?.status === 'Paused' ? (
               <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-500/10 text-amber-300/80 border border-amber-500/20">
                 PAUSED
@@ -350,29 +376,14 @@ export const PuzzleCard: React.FC<PuzzleCardProps> = ({ puzzle, hunter, destinat
               <span>Jeda Hunter</span>
             </button>
           ) : (
-            <div className="flex items-center gap-2">
-              <select
-                value={windowBits}
-                onChange={(e) => setWindowBits(Number(e.target.value))}
-                disabled={isSolved || loading}
-                className="bg-slate-950 border border-slate-800 rounded-xl px-2 py-2 text-xs text-slate-300 focus:outline-none focus:border-amber-500"
-              >
-                <option value={20}>Window 2^20 (1M keys)</option>
-                <option value={24}>Window 2^24 (16M keys)</option>
-                <option value={28}>Window 2^28 (268M keys)</option>
-                <option value={30}>Window 2^30 (1B keys - Optimal)</option>
-                <option value={32}>Window 2^32 (4B keys)</option>
-              </select>
-
-              <button
-                onClick={handleStart}
-                disabled={isSolved || loading}
-                className="flex-1 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 transition disabled:opacity-40"
-              >
-                <Play className="w-3.5 h-3.5 fill-current" />
-                <span>Mulai Hunt</span>
-              </button>
-            </div>
+            <button
+              onClick={() => setIsStartModalOpen(true)}
+              disabled={isSolved || loading}
+              className="w-full py-2 bg-gradient-to-r from-amber-500 to-amber-400 hover:from-amber-400 hover:to-amber-300 text-slate-950 font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 transition disabled:opacity-40 shadow-md shadow-amber-500/10"
+            >
+              <Play className="w-3.5 h-3.5 fill-current" />
+              <span>Mulai Hunt (Pilih GPU / CPU)</span>
+            </button>
           )}
 
           <button
@@ -384,6 +395,16 @@ export const PuzzleCard: React.FC<PuzzleCardProps> = ({ puzzle, hunter, destinat
           </button>
         </div>
       </div>
+
+      {/* Modal Pemilihan Engine GPU vs CPU & Worker Setting */}
+      <StartHuntModal
+        isOpen={isStartModalOpen}
+        onClose={() => setIsStartModalOpen(false)}
+        puzzle={puzzle}
+        hunter={hunter}
+        destinationAddress={destinationAddress}
+        onStarted={onRefresh}
+      />
     </div>
   );
 };

@@ -35,6 +35,7 @@ import {
   WindowRangeProgress,
 } from '../types';
 import { getAudioContext } from '../sound';
+import { StartHuntModal } from './StartHuntModal';
 
 interface PuzzleDetailPageProps {
   puzzle: Puzzle;
@@ -61,6 +62,7 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
   const [loadingWindows, setLoadingWindows] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
   const [simulating, setSimulating] = useState(false);
+  const [isStartModalOpen, setIsStartModalOpen] = useState(false);
   const logContainerRef = useRef<HTMLDivElement>(null);
 
   const handleSimulateCelebration = async () => {
@@ -332,12 +334,12 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
             </button>
           ) : (
             <button
-              onClick={handleStart}
+              onClick={() => setIsStartModalOpen(true)}
               disabled={isSolved || loading}
-              className="px-6 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-xl text-xs flex items-center gap-2 shadow-lg shadow-amber-500/10 transition disabled:opacity-40"
+              className="px-6 py-2.5 bg-gradient-to-r from-amber-500 to-amber-400 hover:from-amber-400 hover:to-amber-300 text-slate-950 font-bold rounded-xl text-xs flex items-center gap-2 shadow-lg shadow-amber-500/10 transition disabled:opacity-40"
             >
               <Play className="w-4 h-4 fill-current" />
-              <span>Mulai Hunt</span>
+              <span>Mulai Hunt (Pilih GPU / CPU)</span>
             </button>
           )}
 
@@ -556,10 +558,10 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
                     <Zap className="w-3.5 h-3.5 text-purple-400 fill-purple-400 animate-pulse" />
                     <span>GPU MODE (NVIDIA CUDA)</span>
                   </span>
-                ) : hunter.device_mode === 'vps' ? (
-                  <span className="bg-emerald-500/15 text-emerald-300 font-bold px-2 py-0.5 rounded-lg border border-emerald-500/30 flex items-center gap-1" title="Mode VPS: Memaksimalkan core untuk puzzle (Sisakan 1 core untuk OS + Postgres + Web API)">
-                    <Server className="w-3 h-3 text-emerald-400" />
-                    <span>VPS MODE (Max Core)</span>
+                ) : hunter.device_mode === 'vps' || hunter.device_mode === 'cpu' ? (
+                  <span className="bg-emerald-500/15 text-emerald-300 font-bold px-2 py-0.5 rounded-lg border border-emerald-500/30 flex items-center gap-1" title="Mode CPU: Memanfaatkan core CPU server (Tokio multi-core)">
+                    <Cpu className="w-3 h-3 text-emerald-400" />
+                    <span>CPU MODE (Multi-Core)</span>
                   </span>
                 ) : (
                   <span className="bg-blue-500/15 text-blue-300 font-bold px-2 py-0.5 rounded-lg border border-blue-500/30 flex items-center gap-1" title="Mode Local: Sisakan 2 core untuk OS & background desktop">
@@ -1251,6 +1253,19 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
           </div>
         )}
       </div>
+
+      {/* Modal Pemilihan Engine GPU vs CPU & Worker Setting */}
+      <StartHuntModal
+        isOpen={isStartModalOpen}
+        onClose={() => setIsStartModalOpen(false)}
+        puzzle={puzzle}
+        hunter={hunter}
+        destinationAddress={destinationAddress}
+        onStarted={() => {
+          onRefresh();
+          fetchScannedWindows();
+        }}
+      />
     </div>
   );
 };

@@ -46,15 +46,32 @@ if command -v sudo &>/dev/null; then
     SUDO="sudo"
 fi
 
+# Mencegah dialog interaktif (seperti timezone / needrestart) yang membekukan terminal
+export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=a
+
 if command -v apt-get &>/dev/null; then
-    $SUDO apt-get update -qq
-    $SUDO apt-get install -y -qq \
-        build-essential cmake pkg-config libssl-dev libgmp-dev libclang-dev clang \
-        git curl wget screen tmux htop nvtop psmisc python3 python3-pip \
-        postgresql postgresql-contrib docker.io docker-compose 2>/dev/null || \
-    $SUDO apt-get install -y -qq \
-        build-essential cmake pkg-config libssl-dev libgmp-dev libclang-dev clang \
-        git curl wget screen tmux htop psmisc python3 python3-pip
+    echo "📦 [1/3] Memperbarui indeks paket (apt update)..."
+    $SUDO apt-get update -y
+    
+    echo "📦 [2/3] Memasang tool pembangunan & dependensi utama..."
+    $SUDO apt-get install -y --no-install-recommends \
+        -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" \
+        build-essential cmake pkg-config libssl-dev libgmp-dev \
+        git curl wget screen tmux htop psmisc python3 python3-pip postgresql-client
+
+    echo "📦 [3/3] Memasang dependensi pelengkap (clang & tool monitoring)..."
+    $SUDO apt-get install -y --no-install-recommends \
+        -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" \
+        libclang-dev clang nvtop 2>/dev/null || true
+
+    # Pasang postgresql lokal jika Docker tidak tersedia
+    if ! command -v docker &>/dev/null && ! command -v psql &>/dev/null; then
+        echo "📦 Memasang PostgreSQL native server..."
+        $SUDO apt-get install -y --no-install-recommends \
+            -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" \
+            postgresql postgresql-contrib 2>/dev/null || true
+    fi
 elif command -v yum &>/dev/null; then
     $SUDO yum install -y gcc gcc-c++ cmake gmp-devel openssl-devel pkgconfig git curl wget screen tmux htop python3
 fi

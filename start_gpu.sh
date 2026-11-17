@@ -1,7 +1,7 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # ==============================================================================
-#   BITCOIN PUZZLE HUNTER â€” GPU INSTANCE QUICK START (BACKEND ONLY)
-#   Usage: bash start_gpu.sh
+#   BITCOIN PUZZLE HUNTER — GPU INSTANCE QUICK START (BACKEND ONLY)
+#   Usage: bash start_gpu.sh [--fg]
 # ==============================================================================
 set -e
 
@@ -17,9 +17,9 @@ PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$PROJECT_DIR"
 
 echo -e "${CYAN}${BOLD}"
-echo "â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—"
-echo "â•‘   ðŸš€  PUZZLE HUNTER â€” START BACKEND GPU HOSTING                      â•‘"
-echo "â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•"
+echo "╔══════════════════════════════════════════════════════════════════════╗"
+echo "║   🚀  PUZZLE HUNTER — START BACKEND GPU HOSTING                      ║"
+echo "╚══════════════════════════════════════════════════════════════════════╝"
 echo -e "${NC}"
 
 # 1. Check GPU Hardware
@@ -28,31 +28,75 @@ GPU_MEM=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader 2>/dev/null 
 echo -e "GPU   : ${GREEN}$GPU_NAME ($GPU_MEM)${NC}"
 
 # 2. Start PostgreSQL
-echo -e "\n${CYAN}[1/3] Menyalakan PostgreSQL...${NC}"
+echo -e "\n${CYAN}[1/3] Menyalakan & Memverifikasi PostgreSQL...${NC}"
+DB_READY=false
+
+# Cek Docker
 if command -v docker &>/dev/null && docker ps &>/dev/null; then
-    docker compose up -d postgres
-    sleep 3
-    if docker exec puzzle_postgres pg_isready -U postgres -d puzzle_hunt &>/dev/null; then
-        echo -e "${GREEN}âœ… PostgreSQL (Docker) siap & running.${NC}"
+    echo "🐳 Mendeteksi Docker... Menyalakan container database..."
+    if ! docker ps -a --format '{{.Names}}' | grep -q "^puzzle_postgres$"; then
+        docker run -d --name puzzle_postgres \
+            --restart always \
+            -e POSTGRES_USER=postgres \
+            -e POSTGRES_PASSWORD=postgrespassword \
+            -e POSTGRES_DB=puzzle_hunt \
+            -p 5432:5432 \
+            -v puzzle_postgres_data:/var/lib/postgresql/data \
+            postgres:16-alpine 2>/dev/null || docker compose up -d postgres 2>/dev/null || true
     else
-        echo -e "${RED}âŒ PostgreSQL belum siap. Cek log: docker logs puzzle_postgres${NC}"
-        exit 1
+        docker start puzzle_postgres 2>/dev/null || docker compose up -d postgres 2>/dev/null || true
     fi
-else
-    service postgresql start 2>/dev/null || true
-    echo -e "${GREEN}âœ… PostgreSQL (Native) siap & running.${NC}"
+
+    for i in {1..15}; do
+        if docker exec puzzle_postgres pg_isready -U postgres -d puzzle_hunt &>/dev/null; then
+            DB_READY=true
+            echo -e "${GREEN}✅ PostgreSQL (Docker) siap & running di port 5432.${NC}"
+            break
+        fi
+        sleep 1
+    done
+fi
+
+# Fallback ke Native PostgreSQL jika Docker tidak siap
+if [ "$DB_READY" != "true" ]; then
+    echo "🐘 Menyalakan PostgreSQL Native di server..."
+    service postgresql start 2>/dev/null || /etc/init.d/postgresql start 2>/dev/null || true
+    
+    # Inisialisasi user & database jika baru pertama kali
+    su - postgres -c "psql -c \"ALTER USER postgres PASSWORD 'postgrespassword';\"" 2>/dev/null || true
+    su - postgres -c "createdb -O postgres puzzle_hunt" 2>/dev/null || true
+    if [ -f "data/seed_unsolved.sql" ]; then
+        su - postgres -c "psql -d puzzle_hunt < data/seed_unsolved.sql" 2>/dev/null || true
+    fi
+
+    for i in {1..10}; do
+        if pg_isready -h 127.0.0.1 -p 5432 -U postgres &>/dev/null || pg_isready -p 5432 &>/dev/null; then
+            DB_READY=true
+            echo -e "${GREEN}✅ PostgreSQL (Native) siap & running di port 5432.${NC}"
+            break
+        fi
+        sleep 1
+    done
+fi
+
+if [ "$DB_READY" != "true" ]; then
+    echo -e "${RED}❌ PostgreSQL belum aktif di port 5432!${NC}"
+    echo -e "${YELLOW}Coba jalankan secara manual salah satu berikut:${NC}"
+    echo "   Docker : docker compose up -d postgres"
+    echo "   Native : service postgresql start"
+    exit 1
 fi
 
 # 3. Check & Build Binary
 echo -e "\n${CYAN}[2/3] Memeriksa & Mengompilasi Binary Backend...${NC}"
 if command -v cargo &>/dev/null; then
-    echo "ðŸ¦€ Mengompilasi versi release terbaru dengan cargo..."
+    echo "🦀 Mengompilasi versi release terbaru dengan cargo..."
     cargo build --release --bin puzzle-hunt
-    echo -e "${GREEN}âœ… Binary siap: target/release/puzzle-hunt${NC}"
+    echo -e "${GREEN}✅ Binary siap: target/release/puzzle-hunt${NC}"
 elif [ -f "target/release/puzzle-hunt" ]; then
-    echo -e "${GREEN}âœ… Menggunakan binary rilis yang sudah ada: target/release/puzzle-hunt${NC}"
+    echo -e "${GREEN}✅ Menggunakan binary rilis yang sudah ada: target/release/puzzle-hunt${NC}"
 else
-    echo -e "${RED}âŒ Error: 'cargo' tidak ditemukan dan target/release/puzzle-hunt belum ada.${NC}"
+    echo -e "${RED}❌ Error: 'cargo' tidak ditemukan dan target/release/puzzle-hunt belum ada.${NC}"
     exit 1
 fi
 
@@ -67,7 +111,7 @@ echo "   API Base URL : http://$PUBLIC_IP:$PORT"
 echo "   WebSocket    : ws://$PUBLIC_IP:$PORT/api/ws"
 echo "   Frontend     : Hosted on Vercel"
 echo -e "${NC}"
-echo -e "${YELLOW}ðŸ’¡ Tip: Sambungkan Vercel dengan menyetel VITE_API_URL=http://$PUBLIC_IP:$PORT${NC}"
+echo -e "${YELLOW}💡 Tip: Sambungkan Vercel dengan menyetel VITE_API_URL=http://$PUBLIC_IP:$PORT${NC}"
 
 # Default mode: DAEMON BACKGROUND (otomatis aman tutup SSH)
 if [ "$1" != "--fg" ] && [ "$1" != "--foreground" ]; then
@@ -82,8 +126,8 @@ if [ "$1" != "--fg" ] && [ "$1" != "--foreground" ]; then
     nohup ./target/release/puzzle-hunt > logs/backend.log 2>&1 &
     PID=$!
     echo "$PID" > .backend.pid
-    echo -e "${GREEN}âœ… Backend berjalan aman di BACKGROUND DAEMON (PID: $PID).${NC}"
-    echo -e "${GREEN}ðŸ”’ Anda AMAN untuk menutup terminal SSH atau mematikan laptop sekarang!${NC}"
+    echo -e "${GREEN}✅ Backend berjalan aman di BACKGROUND DAEMON (PID: $PID).${NC}"
+    echo -e "${GREEN}🔒 Anda AMAN untuk menutup terminal SSH atau mematikan laptop sekarang!${NC}"
     echo -e "${CYAN}   - Pantau log live : tail -f logs/backend.log${NC}"
     echo -e "${CYAN}   - Hentikan        : bash stop.sh (atau kill $PID)${NC}"
 else
@@ -94,7 +138,7 @@ else
     pkill -9 -f puzzle-hunt 2>/dev/null || true
     fuser -k $PORT/tcp 2>/dev/null || true
     sleep 1
-    echo -e "${YELLOW}âš ï¸  PERHATIAN: Berjalan di FOREGROUND (Ctrl+C untuk pause/stop).${NC}"
-    echo "â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”"
+    echo -e "${YELLOW}⚠️  PERHATIAN: Berjalan di FOREGROUND (Ctrl+C untuk pause/stop).${NC}"
+    echo "──────────────────────────────────────────────────────────────────────"
     RUST_LOG=info ./target/release/puzzle-hunt
 fi

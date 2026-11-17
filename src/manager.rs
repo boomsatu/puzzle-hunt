@@ -1858,26 +1858,7 @@ fn parse_kangaroo_count(line: &str) -> Option<u64> {
 }
 
 fn extract_key_from_text(text: &str) -> Option<String> {
-    let lower = text.to_lowercase();
-    for marker in &["private key:", "priv (hex):", "priv:", "found:"] {
-        if let Some(idx) = lower.find(marker) {
-            let after = &text[idx + marker.len()..];
-            for word in after.split_whitespace() {
-                let clean = word.trim().trim_start_matches("0x").trim_matches(|c| c == '[' || c == ']');
-                if clean.len() == 64 && clean.chars().all(|c| c.is_ascii_hexdigit()) {
-                    return Some(clean.to_lowercase());
-                }
-            }
-        }
-    }
-
-    for word in text.split_whitespace() {
-        let clean = word.trim().trim_start_matches("0x").trim_matches(|c| c == '[' || c == ']');
-        if clean.len() == 64 && clean.chars().all(|c| c.is_ascii_hexdigit()) {
-            return Some(clean.to_lowercase());
-        }
-    }
-    None
+    crate::kangaroo::cuda::extract_key_from_text(text)
 }
 
 // ===== Utility Helpers =====

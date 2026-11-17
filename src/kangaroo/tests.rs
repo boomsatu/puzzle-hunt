@@ -314,5 +314,40 @@ mod kangaroo_tests {
         println!("✅ [Address Scan PASS] Private key 0x{:x} ({}) ditemukan dari Address murni!", 
             0xd2c55u64, found_key);
     }
+
+    // ─── Test 10: Ekstraksi Key dari Berbagai Format Output Solver / cuBitCrack ─
+    #[test]
+    fn test_extract_key_from_various_solver_outputs() {
+        use crate::kangaroo::cuda::extract_key_from_text;
+
+        let expected_key = "00000000000000000000000000000000000000000000000040abcdef12345678";
+
+        // Format 1: Output File Resmi BitCrack (-o file: <Address> <64_hex_key> <pubkey>)
+        let bitcrack_file_output = "1PWo3JeB9jrGwfHDNpdGK54CRas7fsVzXU 00000000000000000000000000000000000000000000000040ABCDEF12345678 02123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF";
+        let parsed = extract_key_from_text(bitcrack_file_output);
+        assert_eq!(parsed.as_deref(), Some(expected_key), "Format 1 (BitCrack file -o) gagal diekstrak!");
+
+        // Format 2: Output Stdout BitCrack ("Private key: <hex>")
+        let bitcrack_stdout = "Address:     1PWo3JeB9jrGwfHDNpdGK54CRas7fsVzXU\nPrivate key: 00000000000000000000000000000000000000000000000040ABCDEF12345678\nCompressed:  yes\nPublic key:\n02...";
+        let parsed = extract_key_from_text(bitcrack_stdout);
+        assert_eq!(parsed.as_deref(), Some(expected_key), "Format 2 (BitCrack stdout) gagal diekstrak!");
+
+        // Format 3: Format dengan spasi sebelum colon ("Private key : <hex>")
+        let bitcrack_spaced_colon = "[Info] Address : 1PWo3JeB9jrGwfHDNpdGK54CRas7fsVzXU\nPrivate key : 00000000000000000000000000000000000000000000000040abcdef12345678\nCompressed : yes";
+        let parsed = extract_key_from_text(bitcrack_spaced_colon);
+        assert_eq!(parsed.as_deref(), Some(expected_key), "Format 3 (Spaced colon) gagal diekstrak!");
+
+        // Format 4: Output Daemon ("FOUND <hex> <Address>")
+        let daemon_output = "FOUND 00000000000000000000000000000000000000000000000040abcdef12345678 1PWo3JeB9jrGwfHDNpdGK54CRas7fsVzXU";
+        let parsed = extract_key_from_text(daemon_output);
+        assert_eq!(parsed.as_deref(), Some(expected_key), "Format 4 (Daemon FOUND) gagal diekstrak!");
+
+        // Format 5: Output solver unpadded hex ("Found: 40abcdef12345678") -> harus otomatis dipad ke 64 karakter
+        let unpadded_solver = "Collision detected! Found: 40abcdef12345678";
+        let parsed = extract_key_from_text(unpadded_solver);
+        assert_eq!(parsed.as_deref(), Some(expected_key), "Format 5 (Unpadded hex) gagal diekstrak atau dinormalisasi!");
+
+        println!("✅ [Extract Key PASS] Semua 5 format output cuBitCrack terverifikasi 100% akurat tanpa celah!");
+    }
 }
 

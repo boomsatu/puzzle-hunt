@@ -338,23 +338,42 @@ pub fn run_cuda_solver(
     result
 }
 
-/// Mengekstrak private key 64-karakter hex dari output solver text
+/// Mengekstrak private key hex dari output solver text (baik format file cuBitCrack, stdout, atau daemon)
 pub fn extract_key_from_text(text: &str) -> Option<String> {
     let lower = text.to_lowercase();
-    for marker in &["private key:", "priv (hex):", "privkey:", "priv:", "found:"] {
+    for marker in &["private key", "priv (hex)", "privkey", "priv", "found key", "found"] {
         if let Some(idx) = lower.find(marker) {
             let after = &text[idx + marker.len()..];
-            for word in after.split_whitespace() {
-                let clean = word.trim().trim_start_matches("0x").trim_matches(|c| c == '[' || c == ']');
-                if clean.len() == 64 && clean.chars().all(|c| c.is_ascii_hexdigit()) {
-                    return Some(clean.to_lowercase());
+            let trimmed = after.trim_start_matches(|c: char| c.is_whitespace() || c == ':' || c == '=');
+            for word in trimmed.split_whitespace() {
+                let clean = word.trim().trim_start_matches("0x").trim_matches(|c| c == '[' || c == ']' || c == '(' || c == ')' || c == '"' || c == '\'');
+                if !clean.is_empty() && clean.len() <= 64 && clean.chars().all(|c| c.is_ascii_hexdigit()) {
+                    let padded = format!("{:0>64}", clean.to_lowercase());
+                    return Some(padded);
                 }
             }
         }
     }
 
+    // Format file output resmi BitCrack: "<Address> <PrivateKeyHex> <PublicKeyHex>"
+    for line in text.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 2 {
+            let p0 = parts[0];
+            let p1 = parts[1].trim_start_matches("0x").trim_matches(|c| c == '[' || c == ']' || c == '(' || c == ')');
+            if (p0.starts_with('1') || p0.starts_with('3') || p0.starts_with("bc1"))
+                && !p1.is_empty()
+                && p1.len() <= 64
+                && p1.chars().all(|c| c.is_ascii_hexdigit())
+            {
+                let padded = format!("{:0>64}", p1.to_lowercase());
+                return Some(padded);
+            }
+        }
+    }
+
     for word in text.split_whitespace() {
-        let clean = word.trim().trim_start_matches("0x").trim_matches(|c| c == '[' || c == ']');
+        let clean = word.trim().trim_start_matches("0x").trim_matches(|c| c == '[' || c == ']' || c == '(' || c == ')' || c == '"' || c == '\'');
         if clean.len() == 64 && clean.chars().all(|c| c.is_ascii_hexdigit()) {
             return Some(clean.to_lowercase());
         }
@@ -445,14 +464,19 @@ pub fn run_cuda_bitcrack_window(
         let _ = std::fs::remove_file(&out_file);
     }
 
-    // Periksa juga stdout jika output file belum terbuat
+    // Periksa juga stdout / stderr jika output file belum terbuat
     if found_key.is_none() {
-        if let Ok(output) = child.wait_with_output() {
-            let stdout_str = String::from_utf8_lossy(&output.stdout);
-            if let Some(key_hex) = extract_key_from_text(&stdout_str) {
-                if let Some(cand) = BigUint::parse_bytes(key_hex.as_bytes(), 16) {
-                    found_key = Some(cand);
-                }
+        use std::io::Read;
+        let mut out_str = String::new();
+        if let Some(mut stdout) = child.stdout.take() {
+            let _ = stdout.read_to_string(&mut out_str);
+        }
+        if let Some(mut stderr) = child.stderr.take() {
+            let _ = stderr.read_to_string(&mut out_str);
+        }
+        if let Some(key_hex) = extract_key_from_text(&out_str) {
+            if let Some(cand) = BigUint::parse_bytes(key_hex.as_bytes(), 16) {
+                found_key = Some(cand);
             }
         }
     }

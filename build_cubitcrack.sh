@@ -31,10 +31,14 @@ echo "📦 Mengunduh source code BitCrack..."
 git clone --depth 1 https://github.com/brichard19/BitCrack.git "$BUILD_DIR"
 cd "$BUILD_DIR"
 
-# Patch BitCrack source untuk mengaktifkan --daemon interactive mode (Zero Teardown / Real-time jumping)
-if [ -f "$SCRIPT_DIR/patch_cubitcrack.py" ]; then
-    echo "⚡ Menerapkan patch Interactive Daemon Mode ke BitCrack source..."
-    python3 "$SCRIPT_DIR/patch_cubitcrack.py" "$BUILD_DIR" || python "$SCRIPT_DIR/patch_cubitcrack.py" "$BUILD_DIR" || true
+# Patch BitCrack source untuk mengaktifkan --daemon interactive mode (Opsional eksperimental)
+if [ "$APPLY_DAEMON_PATCH" = "1" ] || [ "$APPLY_DAEMON_PATCH" = "true" ]; then
+    if [ -f "$SCRIPT_DIR/patch_cubitcrack.py" ]; then
+        echo "⚡ Menerapkan patch Interactive Daemon Mode ke BitCrack source..."
+        python3 "$SCRIPT_DIR/patch_cubitcrack.py" "$BUILD_DIR" || python "$SCRIPT_DIR/patch_cubitcrack.py" "$BUILD_DIR" || true
+    fi
+else
+    echo "🚀 Menggunakan official BitCrack engine (NVIDIA MPS multi-worker, 100% stabil & terbukti) dengan native Blackwell sm_120..."
 fi
 
 # 4. Modifikasi Makefile BitCrack agar menyertakan PTX (code=[sm_XX,compute_XX])

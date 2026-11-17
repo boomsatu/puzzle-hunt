@@ -429,14 +429,14 @@ async fn run_hunt_loop(
     } else if device_mode == DeviceMode::Gpu {
         // Address Scanner Mode di GPU (cuBitCrack):
         // Di GPU, cuBitCrack memeriksa miliaran kunci per detik.
-        // Default diatur ke 28-bit (~268.4 Juta keys/worker, total 16 worker = ~4.29 Miliar keys/ronde).
-        // Di Dual RTX 5090 (6-7 GK/s), setiap ronde selesai dalam ~0.6 - 0.8 detik!
+        // Default diatur ke 26-bit (~67.1 Juta keys/worker, total 32 worker = ~2.15 Miliar keys/ronde).
+        // Di Dual RTX 5090, setiap ronde selesai dalam ~2.5 - 3.5 detik!
         // Setiap ronde langsung tersimpan ke PostgreSQL, counter bertambah cepat, dan visual UI sangat responsif!
-        // Dapat dikonfigurasi via GPU_WINDOW_BITS di .env (misal 26 = 67M, 27 = 134M, 28 = 268M)
+        // Dapat dikonfigurasi via GPU_WINDOW_BITS di .env (misal 25 = ~1.8s, 26 = ~3s, 27 = ~5.5s)
         let default_gpu_bits = std::env::var("GPU_WINDOW_BITS")
             .ok()
             .and_then(|v| v.trim().parse::<u32>().ok())
-            .unwrap_or(28);
+            .unwrap_or(26);
         default_gpu_bits.min(total_range_bits.saturating_sub(1).max(8))
     } else {
         // Address Scanner Mode (Hash160 only, e.g. Puzzle #71):
@@ -579,9 +579,14 @@ async fn run_hunt_loop(
         }
     }
 
-    // Inisialisasi pool CudaBitcrackDaemon jika GPU mode aktif untuk address scan (Zero Teardown)
+    // Mode daemon cuBitCrack (opsional eksperimental via USE_CUDA_DAEMON=true di .env)
+    // Default: false (menggunakan NVIDIA MPS multi-worker batch engine yang 100% stabil & terbukti)
+    let use_daemon = std::env::var("USE_CUDA_DAEMON")
+        .map(|v| v.trim() == "1" || v.trim().eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
     let mut bitcrack_daemons: Vec<crate::kangaroo::cuda::CudaBitcrackDaemon> = Vec::new();
-    if device_mode == DeviceMode::Gpu && target_pub_bytes.is_none() {
+    if use_daemon && device_mode == DeviceMode::Gpu && target_pub_bytes.is_none() {
         if let Some(bin) = crate::kangaroo::cuda::find_cuda_address_solver() {
             let num_w = get_optimal_workers(&states, device_mode);
             let gpu_count = crate::kangaroo::cuda::get_gpu_count();

@@ -89,6 +89,12 @@ pub struct HunterState {
     #[serde(default)]
     pub keys_per_round: u64,
     #[serde(default)]
+    pub round_keys_checked: u64,
+    #[serde(default)]
+    pub round_progress_pct: f64,
+    #[serde(default)]
+    pub round_workers_done: usize,
+    #[serde(default)]
     pub is_kangaroo_mode: bool,
 }
 
@@ -121,6 +127,9 @@ impl HunterState {
             window_bits: 0,
             window_keys: 0,
             keys_per_round: 0,
+            round_keys_checked: 0,
+            round_progress_pct: 0.0,
+            round_workers_done: 0,
             is_kangaroo_mode: false,
         }
     }
@@ -726,6 +735,9 @@ async fn run_hunt_loop(
                 st.window_bits = effective_window_bits;
                 st.window_keys = win_keys;
                 st.keys_per_round = (num_workers as u64) * win_keys;
+                st.round_workers_done = 0;
+                st.round_progress_pct = 0.0;
+                st.round_keys_checked = 0;
                 st.is_kangaroo_mode = target_pub_bytes.is_some();
                 if device_mode == DeviceMode::Gpu {
                     st.gpu_info = Some(crate::kangaroo::cuda::get_telemetry(num_workers));
@@ -755,6 +767,7 @@ async fn run_hunt_loop(
         };
 
         // Jalankan seluruh worker secara paralel (Gunakan persistent CUDA daemon jika siap, atau fallback standard)
+        let done_workers = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let batch_results = if daemons_active {
             let futs = bitcrack_daemons.iter_mut().zip(batch_windows.iter()).enumerate().map(|(w_idx, (daemon, (win_id, ws, we)))| {
                 let s_hex = format!("0x{:x}", ws);
@@ -765,9 +778,16 @@ async fn run_hunt_loop(
                 let we_clone = we.clone();
                 let p_addr = puzzle.address.clone();
                 let assigned_gpu = daemon.gpu_id;
+                let done_workers_clone = done_workers.clone();
+                let states_cb = states.clone();
+                let ws_tx_cb = ws_tx.clone();
+                let p_num = puzzle_num;
+                let total_w = num_workers;
+                let win_keys_val = 1u64 << effective_window_bits;
+
                 async move {
                     let res = daemon.search_range(&s_hex, &e_hex, stop_inner.clone()).await;
-                    match res {
+                    let ret = match res {
                         Ok(r) => (win_id_val, ws_clone, we_clone, r),
                         Err(e) => {
                             tracing::warn!("⚠️ [CUDA DAEMON] Worker {w_idx} error: {e}. Fallback ke single-run window.");
@@ -794,7 +814,24 @@ async fn run_hunt_loop(
                             };
                             (win_id_val, ws_clone, we_clone, fallback_res)
                         }
+                    };
+
+                    let finished = done_workers_clone.fetch_add(1, Ordering::SeqCst) + 1;
+                    let pct = ((finished as f64) / (total_w as f64)) * 100.0;
+                    let round_keys = (finished as u64) * win_keys_val;
+                    {
+                        let mut s = states_cb.lock().unwrap();
+                        if let Some(st) = s.get_mut(&p_num) {
+                            st.round_workers_done = finished;
+                            st.round_progress_pct = pct;
+                            st.round_keys_checked = round_keys;
+                            if let Ok(msg) = serde_json::to_string(&*st) {
+                                let _ = ws_tx_cb.send(msg);
+                            }
+                        }
                     }
+
+                    ret
                 }
             });
             futures_util::future::join_all(futs).await
@@ -807,83 +844,97 @@ async fn run_hunt_loop(
                 let we_clone = we.clone();
                 let mode = device_mode;
                 let p_addr = puzzle.address.clone();
+                let done_workers_clone = done_workers.clone();
+                let states_cb = states.clone();
+                let ws_tx_cb = ws_tx.clone();
+                let p_num = puzzle_num;
+                let total_w = num_workers;
+                let win_keys_val = 1u64 << effective_window_bits;
 
-                tokio::task::spawn_blocking(move || {
-                    if mode == DeviceMode::Gpu {
-                        // 1. Mode Address Scanner di GPU (cuBitCrack multi-GPU / multi-worker)
-                        if target_pub.is_none() {
-                            if let Some(bin) = crate::kangaroo::cuda::find_cuda_address_solver() {
-                                let gpu_count = crate::kangaroo::cuda::get_gpu_count();
-                                let assigned_gpu = w_idx % gpu_count;
-                                let workers_per_gpu = (num_workers / gpu_count).max(1);
-                                let total_sm = crate::kangaroo::cuda::get_optimal_bitcrack_blocks(assigned_gpu);
-                                // Bagi total SM GPU secara adil ke setiap worker pada GPU ini
-                                // Contoh 32 worker di Dual RTX 5090: 16 worker/GPU -> 170/16 = 10 blocks/worker!
-                                // Efek: Alokasi VRAM menciut dari 1.5GB ke ~100MB per worker, starting points hanya 655K,
-                                // dan 32 worker berjalan serentak TANPA BEREBUT SM ATAU MEMORI!
-                                let sm_blocks = (total_sm / (workers_per_gpu as u32)).clamp(4, total_sm);
-                                let res = crate::kangaroo::cuda::run_cuda_bitcrack_window(
-                                    &bin,
-                                    &p_addr,
-                                    &ws_clone,
-                                    &we_clone,
-                                    assigned_gpu,
-                                    sm_blocks,
-                                    stop_inner.clone(),
-                                );
-                                return (win_id, ws_clone, we_clone, res);
-                            }
-                        }
-
-                        // 2. Mode Solver CUDA eksternal lainnya jika terpasang (misal keyhunt)
-                        if let Some(bin) = crate::kangaroo::cuda::find_cuda_solver_binary() {
-                            let lower_bin = bin.to_lowercase();
-                            if !lower_bin.contains("kangaroo") {
-                                if let Some(res) = crate::kangaroo::cuda::run_cuda_solver(
-                                    &bin,
-                                    target_pub.as_ref(),
-                                    target_h160.as_ref(),
-                                    &ws_clone,
-                                    &we_clone,
-                                    dp_bits,
-                                    stop_inner.clone(),
-                                ) {
+                async move {
+                    let task_fut = tokio::task::spawn_blocking(move || {
+                        if mode == DeviceMode::Gpu {
+                            // 1. Mode Address Scanner di GPU (cuBitCrack multi-GPU / multi-worker)
+                            if target_pub.is_none() {
+                                if let Some(bin) = crate::kangaroo::cuda::find_cuda_address_solver() {
+                                    let gpu_count = crate::kangaroo::cuda::get_gpu_count();
+                                    let assigned_gpu = w_idx % gpu_count;
+                                    let workers_per_gpu = (total_w / gpu_count).max(1);
+                                    let total_sm = crate::kangaroo::cuda::get_optimal_bitcrack_blocks(assigned_gpu);
+                                    let sm_blocks = (total_sm / (workers_per_gpu as u32)).clamp(4, total_sm);
+                                    let res = crate::kangaroo::cuda::run_cuda_bitcrack_window(
+                                        &bin,
+                                        &p_addr,
+                                        &ws_clone,
+                                        &we_clone,
+                                        assigned_gpu,
+                                        sm_blocks,
+                                        stop_inner.clone(),
+                                    );
                                     return (win_id, ws_clone, we_clone, res);
                                 }
                             }
+
+                            // 2. Mode Solver CUDA eksternal lainnya jika terpasang (misal keyhunt)
+                            if let Some(bin) = crate::kangaroo::cuda::find_cuda_solver_binary() {
+                                let lower_bin = bin.to_lowercase();
+                                if !lower_bin.contains("kangaroo") {
+                                    if let Some(res) = crate::kangaroo::cuda::run_cuda_solver(
+                                        &bin,
+                                        target_pub.as_ref(),
+                                        target_h160.as_ref(),
+                                        &ws_clone,
+                                        &we_clone,
+                                        dp_bits,
+                                        stop_inner.clone(),
+                                    ) {
+                                        return (win_id, ws_clone, we_clone, res);
+                                    }
+                                }
+                            }
+                        }
+
+                        let res = if let Some(pub_bytes) = target_pub {
+                            run_kangaroo_window(
+                                &pub_bytes,
+                                &ws_clone,
+                                &we_clone,
+                                dp_bits,
+                                Some(stop_inner),
+                            )
+                        } else if let Some(h160) = target_h160 {
+                            crate::kangaroo::run_address_window(
+                                &h160,
+                                &ws_clone,
+                                &we_clone,
+                                Some(stop_inner),
+                            )
+                        } else {
+                            crate::kangaroo::KangarooResult::miss(0, 0.0)
+                        };
+                        (win_id, ws_clone, we_clone, res)
+                    });
+
+                    let ret = task_fut.await.unwrap_or_else(|_| (win_id, ws, we, crate::kangaroo::KangarooResult::miss(0, 0.0)));
+                    let finished = done_workers_clone.fetch_add(1, Ordering::SeqCst) + 1;
+                    let pct = ((finished as f64) / (total_w as f64)) * 100.0;
+                    let round_keys = (finished as u64) * win_keys_val;
+                    {
+                        let mut s = states_cb.lock().unwrap();
+                        if let Some(st) = s.get_mut(&p_num) {
+                            st.round_workers_done = finished;
+                            st.round_progress_pct = pct;
+                            st.round_keys_checked = round_keys;
+                            if let Ok(msg) = serde_json::to_string(&*st) {
+                                let _ = ws_tx_cb.send(msg);
+                            }
                         }
                     }
-
-                    let res = if let Some(pub_bytes) = target_pub {
-                        run_kangaroo_window(
-                            &pub_bytes,
-                            &ws_clone,
-                            &we_clone,
-                            dp_bits,
-                            Some(stop_inner),
-                        )
-                    } else if let Some(h160) = target_h160 {
-                        crate::kangaroo::run_address_window(
-                            &h160,
-                            &ws_clone,
-                            &we_clone,
-                            Some(stop_inner),
-                        )
-                    } else {
-                        crate::kangaroo::KangarooResult::miss(0, 0.0)
-                    };
-                    (win_id, ws, we, res)
-                })
+                    ret
+                }
             });
 
-            let join_res = futures_util::future::join_all(tasks).await;
-            let mut converted = Vec::with_capacity(join_res.len());
-            for task_res in join_res {
-                if let Ok(tuple) = task_res {
-                    converted.push(tuple);
-                }
-            }
-            converted
+            futures_util::future::join_all(tasks).await
         };
 
         let mut hit_result = None;
@@ -941,6 +992,9 @@ async fn run_hunt_loop(
                 st.window_bits = effective_window_bits;
                 st.window_keys = win_keys;
                 st.keys_per_round = (num_workers as u64) * win_keys;
+                st.round_workers_done = num_workers;
+                st.round_progress_pct = 100.0;
+                st.round_keys_checked = (num_workers as u64) * win_keys;
                 st.is_kangaroo_mode = target_pub_bytes.is_some();
 
                 // Broadcast live progress ke WebSocket client

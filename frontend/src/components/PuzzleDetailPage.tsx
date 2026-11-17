@@ -718,6 +718,63 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
               <div className="font-mono text-xs sm:text-sm text-slate-200 break-all select-all">
                 {hunter.last_window_hex}
               </div>
+
+              {/* Live Round Batch Progress (Kunci & Persen per Ronde Aktif) */}
+              {hunter && hunter.keys_per_round && hunter.keys_per_round > 0 && isRunning && (
+                <div className="p-3 bg-gradient-to-r from-cyan-950/40 via-slate-950/70 to-blue-950/40 rounded-xl border border-cyan-500/30 space-y-2 shadow-md shadow-cyan-950/20">
+                  <div className="flex items-center justify-between text-xs flex-wrap gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-ping"></span>
+                      <span className="font-extrabold text-white text-xs tracking-wide">
+                        ⚡ PROGRES BATCH RONDE #{hunter.round || 1}
+                      </span>
+                      <span className="text-[11px] text-cyan-300 font-bold bg-cyan-500/15 px-2 py-0.5 rounded-full border border-cyan-500/30">
+                        {hunter.active_workers || 1} Worker Aktif
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 text-xs font-mono font-bold">
+                      <span className="text-cyan-400 text-sm">
+                        {(hunter.round_progress_pct || 0).toFixed(1)}%
+                      </span>
+                      <span className="text-slate-500">•</span>
+                      <span className="text-slate-300 text-xs">
+                        {hunter.round_workers_done || 0} / {hunter.active_workers || 1} Selesai
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Visual Live Progress Bar */}
+                  <div className="relative h-3 bg-slate-950 rounded-full border border-slate-800 overflow-hidden shadow-inner">
+                    <div
+                      className="h-full bg-gradient-to-r from-blue-500 via-indigo-500 to-cyan-400 rounded-full transition-all duration-300 ease-out"
+                      style={{ width: `${Math.min(100, Math.max(hunter.round_progress_pct || 0, isRunning ? 2 : 0))}%` }}
+                    />
+                    {hunter.round_progress_pct && hunter.round_progress_pct > 0 ? (
+                      <div
+                        className="absolute inset-y-0 w-2.5 bg-cyan-300/80 rounded-full blur-sm"
+                        style={{ left: `${Math.min(99, Math.max(0, (hunter.round_progress_pct || 0) - 1))}%` }}
+                      />
+                    ) : null}
+                  </div>
+
+                  <div className="flex items-center justify-between text-[11px] text-slate-400 font-mono flex-wrap gap-2 pt-0.5">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-slate-400 font-sans">Kunci Ronde Ini:</span>
+                      <span className="text-cyan-300 font-bold">
+                        ~{formatCompactKeys(hunter.round_keys_checked || 0)}
+                      </span>
+                      <span className="text-slate-600">/</span>
+                      <span className="text-white font-bold">
+                        ~{formatCompactKeys(hunter.keys_per_round)} Keys
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 text-slate-400">
+                      <span>Window: <strong>2^{hunter.window_bits || 30}</strong> ({formatCompactKeys(hunter.window_keys || 0)}/worker)</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {overallProgress && (
                 <div
                   className="flex items-center gap-3"

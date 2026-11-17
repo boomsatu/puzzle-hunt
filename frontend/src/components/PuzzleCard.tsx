@@ -288,6 +288,27 @@ export const PuzzleCard: React.FC<PuzzleCardProps> = ({ puzzle, hunter, destinat
                     </div>
                   );
                 })()}
+
+                {/* Live Round Batch Progress Bar */}
+                {hunter.keys_per_round && hunter.keys_per_round > 0 && isRunning && (
+                  <div className="mt-2 pt-2 border-t border-slate-800/60 space-y-1">
+                    <div className="flex items-center justify-between text-[10px] font-mono">
+                      <span className="flex items-center gap-1 text-cyan-300 font-semibold">
+                        <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-ping"></span>
+                        Ronde #{hunter.round}: {(hunter.round_progress_pct || 0).toFixed(0)}%
+                      </span>
+                      <span className="text-slate-400">
+                        ~{formatCompactKeys(hunter.round_keys_checked || 0)} / {formatCompactKeys(hunter.keys_per_round)}
+                      </span>
+                    </div>
+                    <div className="h-1.5 bg-slate-900 rounded-full border border-slate-800 overflow-hidden">
+                      <div
+                        className="h-full bg-gradient-to-r from-blue-500 to-cyan-400 rounded-full transition-all duration-300 ease-out"
+                        style={{ width: `${Math.min(100, Math.max(hunter.round_progress_pct || 0, 3))}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           );

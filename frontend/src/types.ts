@@ -72,6 +72,9 @@ export interface HunterState {
   window_bits?: number;
   window_keys?: number;
   keys_per_round?: number;
+  round_keys_checked?: number;
+  round_progress_pct?: number;
+  round_workers_done?: number;
   is_kangaroo_mode?: boolean;
 }
 

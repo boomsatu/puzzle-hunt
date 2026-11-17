@@ -589,6 +589,13 @@ impl CudaBitcrackDaemon {
         Ok(KangarooResult::miss(0, t_start.elapsed().as_secs_f64()))
     }
 
+    pub fn is_alive(&mut self) -> bool {
+        match self.child.try_wait() {
+            Ok(None) => true,
+            _ => false,
+        }
+    }
+
     pub async fn quit(&mut self) {
         use tokio::io::AsyncWriteExt;
         let _ = self.stdin.write_all(b"QUIT\n").await;

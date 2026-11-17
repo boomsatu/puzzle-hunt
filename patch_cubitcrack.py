@@ -26,7 +26,7 @@ def patch_file(path, old, new, desc):
         return False
 
 def patch_bitcrack(base_dir):
-    # 1. Patch KeySearchDevice.h to add virtual destructor (prevent undefined behavior on delete d)
+    # 1. Patch KeySearchDevice.h to add virtual destructor
     h_path = os.path.join(base_dir, "KeyFinderLib", "KeySearchDevice.h")
     patch_file(
         h_path,
@@ -35,14 +35,34 @@ def patch_bitcrack(base_dir):
         "KeySearchDevice.h virtual destructor"
     )
 
-    # 2. Patch CudaKeySearchDevice.cpp to make cudaSetDeviceFlags safe on re-initialization
+    # 2. Patch CudaKeySearchDevice.cpp to make init() re-entrant with buffer cleanup & iteration reset
     cpp_path = os.path.join(base_dir, "CudaKeySearchDevice", "CudaKeySearchDevice.cpp")
-    patch_file(
-        cpp_path,
-        "    // Block on kernel calls\n    cudaCall(cudaSetDeviceFlags(cudaDeviceScheduleBlockingSync));",
-        "    // Block on kernel calls (safe re-init for daemon mode)\n    cudaError_t flagErr = cudaSetDeviceFlags(cudaDeviceScheduleBlockingSync);\n    if(flagErr != cudaSuccess && flagErr != cudaErrorSetOnActiveProcess) {\n        cudaCall(flagErr);\n    }",
-        "CudaKeySearchDevice.cpp cudaSetDeviceFlags safe check"
-    )
+    old_cuda_init = """    _stride = stride;
+
+    cudaCall(cudaSetDevice(_device));
+
+    // Block on kernel calls
+    cudaCall(cudaSetDeviceFlags(cudaDeviceScheduleBlockingSync));"""
+
+    new_cuda_init = """    _stride = stride;
+
+    _iterations = 0;
+
+    cudaCall(cudaSetDevice(_device));
+
+    // Block on kernel calls (safe re-init for daemon mode)
+    cudaError_t flagErr = cudaSetDeviceFlags(cudaDeviceScheduleBlockingSync);
+    if(flagErr != cudaSuccess && flagErr != cudaErrorSetOnActiveProcess) {
+        cudaCall(flagErr);
+    }
+
+    // Clean up previous run buffers to prevent memory leaks in daemon mode
+    cleanupChainBuf();
+    _deviceKeys.clearPublicKeys();
+    _deviceKeys.clearPrivateKeys();
+    _resultList.cleanup();"""
+
+    patch_file(cpp_path, old_cuda_init, new_cuda_init, "CudaKeySearchDevice.cpp re-entrant buffer cleanup & iteration reset")
 
     # 3. Patch KeyFinder/main.cpp
     main_path = os.path.join(base_dir, "KeyFinder", "main.cpp")
@@ -75,7 +95,7 @@ def patch_bitcrack(base_dir):
                 'if(optArg.equals("", "--daemon")) {\n\t\t\t\t_config.daemon = true;\n\t\t\t} else if(optArg.equals("-t", "--threads")) {'
             )
 
-        # Daemon execution loop in run()
+        # Daemon execution loop in run() - NOTE: NEVER delete d inside the while loop!
         old_run = """        // Get device context
         KeySearchDevice *d = getDeviceContext(_devices[_config.device], _config.blocks, _config.threads, _config.pointsPerThread);
 
@@ -118,11 +138,6 @@ def patch_bitcrack(base_dir):
                         secp256k1::uint256 startKey;
                         secp256k1::uint256 endKey;
                         parseKeyspace(s_start + ":" + s_end, startKey, endKey);
-
-                        if (d != NULL) {
-                            delete d;
-                        }
-                        d = getDeviceContext(_devices[_config.device], _config.blocks, _config.threads, _config.pointsPerThread);
 
                         KeyFinder f(startKey, endKey, _config.compression, d, _config.stride);
                         f.setResultCallback(resultCallback);
@@ -181,7 +196,7 @@ def patch_bitcrack(base_dir):
 
         if old_run_norm in content_norm:
             content_norm = content_norm.replace(old_run_norm, new_run_norm)
-            print("✅ KeyFinder/main.cpp patched with Interactive Daemon Mode!")
+            print("✅ KeyFinder/main.cpp patched with Persistent Daemon Mode!")
         elif new_run_norm in content_norm:
             print("ℹ️ KeyFinder/main.cpp already patched!")
         else:
@@ -199,7 +214,6 @@ def patch_bitcrack(base_dir):
 
 if __name__ == '__main__':
     target = sys.argv[1] if len(sys.argv) > 1 else "."
-    # If a file path was passed directly (e.g. .../KeyFinder/main.cpp), find the repo root
     if os.path.isfile(target):
         base = os.path.dirname(os.path.dirname(os.path.abspath(target)))
     else:

@@ -733,8 +733,24 @@ async fn run_hunt_loop(
             }
         }
 
+        // Periksa kesehatan pool persistent CUDA daemon
+        let daemons_active = if !bitcrack_daemons.is_empty() {
+            let all_alive = bitcrack_daemons.iter_mut().all(|d| d.is_alive());
+            if !all_alive {
+                tracing::warn!("⚠️ [CUDA DAEMON] Worker daemon terdeteksi berhenti. Membersihkan pool dan beralih ke engine batch standard.");
+                for mut d in bitcrack_daemons.drain(..) {
+                    d.quit().await;
+                }
+                false
+            } else {
+                bitcrack_daemons.len() == batch_windows.len()
+            }
+        } else {
+            false
+        };
+
         // Jalankan seluruh worker secara paralel (Gunakan persistent CUDA daemon jika siap, atau fallback standard)
-        let batch_results = if !bitcrack_daemons.is_empty() && bitcrack_daemons.len() == batch_windows.len() {
+        let batch_results = if daemons_active {
             let futs = bitcrack_daemons.iter_mut().zip(batch_windows.iter()).enumerate().map(|(w_idx, (daemon, (win_id, ws, we)))| {
                 let s_hex = format!("0x{:x}", ws);
                 let e_hex = format!("0x{:x}", we);

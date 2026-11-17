@@ -465,6 +465,134 @@ pub fn run_cuda_bitcrack_window(
     }
 }
 
+/// Interactive Daemon Worker untuk cuBitCrack (Persistent CUDA Context)
+/// Menjaga proses cuBitCrack tetap hidup di VRAM GPU dan menerima perintah RANGE via stdin,
+/// sehingga jeda antar-lompatan turun dari 5 detik menjadi < 10 milidetik (0 startup overhead!).
+#[allow(dead_code)]
+pub struct CudaBitcrackDaemon {
+    pub worker_id: usize,
+    pub gpu_id: usize,
+    child: tokio::process::Child,
+    stdin: tokio::process::ChildStdin,
+    stdout_lines: tokio::io::Lines<tokio::io::BufReader<tokio::process::ChildStdout>>,
+}
+
+impl CudaBitcrackDaemon {
+    pub async fn spawn(
+        bin: &str,
+        worker_id: usize,
+        gpu_id: usize,
+        sm_blocks: u32,
+        target_address: &str,
+        out_path: &str,
+    ) -> Result<Self, String> {
+        let mut cmd = tokio::process::Command::new(bin);
+        cmd.env("CUDA_DEVICE_ORDER", "PCI_BUS_ID");
+        cmd.env("CUDA_VISIBLE_DEVICES", gpu_id.to_string());
+        cmd.args([
+            "--daemon",
+            "-d", "0",
+            "-b", &sm_blocks.to_string(),
+            "-t", "256",
+            "-p", "256",
+            "-c",
+            "-o", out_path,
+            target_address,
+        ]);
+        cmd.stdin(std::process::Stdio::piped());
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::null());
+
+        let mut child = cmd.spawn().map_err(|e| format!("Spawn failed: {e}"))?;
+        let stdin = child.stdin.take().ok_or_else(|| "Failed to get stdin".to_string())?;
+        let stdout = child.stdout.take().ok_or_else(|| "Failed to get stdout".to_string())?;
+        use tokio::io::AsyncBufReadExt;
+        let mut stdout_lines = tokio::io::BufReader::new(stdout).lines();
+
+        // Tunggu sinyal DAEMON_READY (timeout 15 detik)
+        let ready = tokio::time::timeout(tokio::time::Duration::from_secs(15), async {
+            while let Ok(Some(line)) = stdout_lines.next_line().await {
+                if line.contains("DAEMON_READY") {
+                    return true;
+                }
+            }
+            false
+        }).await.unwrap_or(false);
+
+        if !ready {
+            let _ = child.kill().await;
+            return Err("Daemon did not emit DAEMON_READY (solver might not support --daemon)".to_string());
+        }
+
+        Ok(Self {
+            worker_id,
+            gpu_id,
+            child,
+            stdin,
+            stdout_lines,
+        })
+    }
+
+    pub async fn search_range(
+        &mut self,
+        start_hex: &str,
+        end_hex: &str,
+        stop_flag: Arc<AtomicBool>,
+    ) -> Result<KangarooResult, String> {
+        let t_start = std::time::Instant::now();
+        let s_clean = start_hex.trim_start_matches("0x");
+        let e_clean = end_hex.trim_start_matches("0x");
+        let cmd_line = format!("RANGE {s_clean} {e_clean}\n");
+        use tokio::io::AsyncWriteExt;
+        self.stdin.write_all(cmd_line.as_bytes()).await.map_err(|e| e.to_string())?;
+        self.stdin.flush().await.map_err(|e| e.to_string())?;
+
+        while !stop_flag.load(Ordering::Relaxed) {
+            tokio::select! {
+                line_res = self.stdout_lines.next_line() => {
+                    match line_res {
+                        Ok(Some(line)) => {
+                            let trimmed = line.trim();
+                            if trimmed.starts_with("FOUND") {
+                                let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                                if parts.len() >= 2 {
+                                    if let Some(key) = BigUint::parse_bytes(parts[1].as_bytes(), 16) {
+                                        return Ok(KangarooResult::hit(key, 1, t_start.elapsed().as_secs_f64()));
+                                    }
+                                }
+                            } else if trimmed.starts_with("DONE") {
+                                let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                                let keys = parts.get(1).and_then(|k| k.parse::<u64>().ok()).unwrap_or(1);
+                                let elapsed = parts.get(2).and_then(|e| e.parse::<f64>().ok()).unwrap_or_else(|| t_start.elapsed().as_secs_f64());
+                                return Ok(KangarooResult::miss(keys, elapsed));
+                            } else if trimmed.starts_with("ERROR") {
+                                return Err(format!("Daemon reported error: {trimmed}"));
+                            }
+                        }
+                        Ok(None) => return Err("Daemon closed stream unexpectedly".to_string()),
+                        Err(e) => return Err(e.to_string()),
+                    }
+                }
+                _ = tokio::time::sleep(tokio::time::Duration::from_millis(50)) => {
+                    if stop_flag.load(Ordering::Relaxed) {
+                        break;
+                    }
+                }
+            }
+        }
+
+        Ok(KangarooResult::miss(0, t_start.elapsed().as_secs_f64()))
+    }
+
+    pub async fn quit(&mut self) {
+        use tokio::io::AsyncWriteExt;
+        let _ = self.stdin.write_all(b"QUIT\n").await;
+        let _ = self.stdin.flush().await;
+        let _ = tokio::time::timeout(tokio::time::Duration::from_millis(500), self.child.wait()).await;
+        let _ = self.child.kill().await;
+    }
+}
+
 /// Inisialisasi dan verifikasi status CUDA saat aplikasi startup
 pub fn init_cuda_status() -> (bool, String) {
     if let Some(gpu) = detect_cuda_gpu() {

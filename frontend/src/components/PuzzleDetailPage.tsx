@@ -769,7 +769,7 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
                     </div>
                   </div>
 
-                  {/* 3-Stage Mini Stepper */}
+                  {/* 3-Stage Mini Stepper (Async Pipelined Double-Buffering) */}
                   <div className="grid grid-cols-3 gap-1.5 text-[10px] font-medium">
                     <div className={`flex items-center justify-center gap-1 py-1 px-1.5 rounded border transition-all ${
                       hunter.round_phase === 'dispatching'
@@ -779,7 +779,7 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
                         : 'bg-slate-900/40 border-slate-800 text-slate-500'
                     }`}>
                       <Cpu className="w-2.5 h-2.5" />
-                      <span>1. CPU Dispatch</span>
+                      <span>1. CPU Pre-Dispatch</span>
                     </div>
                     <div className={`flex items-center justify-center gap-1 py-1 px-1.5 rounded border transition-all ${
                       hunter.round_phase === 'computing'
@@ -799,7 +799,7 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
                         : 'bg-slate-900/40 border-slate-800 text-slate-500'
                     }`}>
                       <Database className="w-2.5 h-2.5" />
-                      <span>3. Postgres Commit</span>
+                      <span>3. Async DB Commit</span>
                     </div>
                   </div>
 

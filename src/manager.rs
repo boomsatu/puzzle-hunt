@@ -392,6 +392,93 @@ fn get_optimal_workers(states: &Arc<Mutex<HashMap<i32, HunterState>>>, mode: Dev
     }
 }
 
+#[derive(Clone)]
+struct PreparedBatch {
+    round: u64,
+    num_workers: usize,
+    batch_windows: Vec<(i64, BigUint, BigUint)>,
+    active_win_list: Vec<WorkerWindow>,
+    first_start_hex: String,
+    first_end_hex: String,
+    total_round_keys: u64,
+    est_round_secs: f64,
+}
+
+fn prepare_batch_windows(
+    round: u64,
+    num_workers: usize,
+    scanned: &mut Vec<(BigUint, BigUint)>,
+    search_strategy: &str,
+    full_start: &BigUint,
+    effective_end: &BigUint,
+    window_size: &BigUint,
+    max_window_id: &BigUint,
+    effective_window_bits: u32,
+    last_kps: f64,
+    device_mode: DeviceMode,
+) -> PreparedBatch {
+    let mut batch_windows = Vec::with_capacity(num_workers);
+    for w_idx in 0..num_workers {
+        let (window_id, w_start, w_end) = if search_strategy == "random" {
+            pick_window_smart(
+                full_start,
+                effective_end,
+                window_size,
+                max_window_id,
+                scanned,
+                num_workers as u64,
+            )
+        } else {
+            pick_window_stratified(
+                w_idx,
+                num_workers,
+                full_start,
+                effective_end,
+                window_size,
+                max_window_id,
+                scanned,
+            )
+        };
+        insert_sorted(scanned, (w_start.clone(), w_end.clone()));
+        batch_windows.push((window_id, w_start, w_end));
+    }
+
+    let first_start_hex = format!("0x{:x}", batch_windows[0].1);
+    let first_end_hex = format!("0x{:x}", batch_windows[0].2);
+
+    let active_win_list: Vec<WorkerWindow> = batch_windows
+        .iter()
+        .enumerate()
+        .map(|(idx, (_, ws, we))| WorkerWindow {
+            worker_id: idx + 1,
+            start_hex: format!("0x{:x}", ws),
+            end_hex: format!("0x{:x}", we),
+        })
+        .collect();
+
+    let win_keys = 1u64 << effective_window_bits;
+    let total_round_keys = (num_workers as u64) * win_keys;
+
+    let est_round_secs = if last_kps > 10_000.0 {
+        (total_round_keys as f64 / last_kps).clamp(1.5, 45.0)
+    } else if device_mode == DeviceMode::Gpu {
+        3.8
+    } else {
+        12.0
+    };
+
+    PreparedBatch {
+        round,
+        num_workers,
+        batch_windows,
+        active_win_list,
+        first_start_hex,
+        first_end_hex,
+        total_round_keys,
+        est_round_secs,
+    }
+}
+
 async fn run_hunt_loop(
     pool: PgPool,
     puzzle: Puzzle,
@@ -568,7 +655,6 @@ async fn run_hunt_loop(
     let mut round: u64 = 0;
     let mut total_keys: u64 = 0;
     let mut last_kps: f64 = 0.0;
-    let mut last_check = Instant::now();
     let session_start = Instant::now();
 
     match device_mode {
@@ -658,100 +744,127 @@ async fn run_hunt_loop(
         }
     }
 
+    // Background DB committer channel (buffer 64 batch)
+    let (db_tx, mut db_rx) = tokio::sync::mpsc::channel::<Vec<db::NewScannedWindow>>(64);
+    let db_pool = pool.clone();
+    let db_p_num = puzzle_num;
+    let db_writer_handle = tokio::spawn(async move {
+        let mut total_saved = 0usize;
+        while let Some(records) = db_rx.recv().await {
+            if !records.is_empty() {
+                let count = records.len();
+                if let Err(e) = db::record_scanned_windows_batch(&db_pool, &records).await {
+                    tracing::warn!("⚠️ [ASYNC DB COMMIT] Gagal menyimpan batch {count} windows puzzle #{db_p_num} ke PostgreSQL: {e}");
+                } else {
+                    total_saved += count;
+                }
+            }
+        }
+        tracing::info!("✅ [ASYNC DB COMMIT DRAINED] Seluruh {total_saved} window puzzle #{db_p_num} tuntas disimpan di PostgreSQL.");
+    });
+
+    // Background On-chain Watchdog (Non-blocking: berjalan di task independen tanpa menjeda GPU)
+    let watchdog_pool = pool.clone();
+    let watchdog_states = states.clone();
+    let watchdog_stop = stop_flag.clone();
+    let watchdog_pause = pause_flag.clone();
+    let watchdog_addr = puzzle.address.clone();
+    let watchdog_p_num = puzzle_num;
+    let watchdog_handle = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(check_interval_secs));
+        interval.tick().await; // lewati tick awal
+        loop {
+            interval.tick().await;
+            if watchdog_stop.load(Ordering::Relaxed) || watchdog_pause.load(Ordering::Relaxed) {
+                break;
+            }
+            let onchain = check_puzzle_status(&watchdog_addr).await;
+            update_balance(&watchdog_states, watchdog_p_num, onchain.balance_sats);
+            if onchain.is_solved {
+                let _ = db::mark_puzzle_solved(&watchdog_pool, watchdog_p_num, &onchain.message).await;
+                update_status(&watchdog_states, watchdog_p_num, HunterStatus::SolvedByOther);
+                tracing::warn!("🛑 Puzzle #{watchdog_p_num} telah solved oleh orang lain di on-chain!");
+                watchdog_stop.store(true, Ordering::Relaxed);
+                break;
+            }
+        }
+    });
+
+    let search_strategy = std::env::var("SEARCH_STRATEGY")
+        .unwrap_or_else(|_| "stratified".to_string())
+        .to_lowercase();
+
+    let num_w_init = get_optimal_workers(&states, device_mode);
+    round += num_w_init as u64;
+    let mut actually_scanned_windows = scanned.len() as u64;
+
+    // Pre-allocated initial batch
+    let mut prepped_batch: Option<PreparedBatch> = Some(prepare_batch_windows(
+        round,
+        num_w_init,
+        &mut scanned,
+        &search_strategy,
+        &full_start,
+        &effective_end,
+        &window_size,
+        &max_window_id,
+        effective_window_bits,
+        last_kps,
+        device_mode,
+    ));
+
+    let mut global_hit_result = None;
+
     loop {
         // Cek sinyal jeda cerdas (Smart Pause) atau paksa stop sebelum memulai batch baru
         if pause_flag.load(Ordering::Relaxed) || stop_flag.load(Ordering::Relaxed) {
-            tracing::info!("⏸️ [SMART PAUSE] Hunter puzzle #{puzzle_num} dijeda secara aman.");
-            update_status(&states, puzzle_num, HunterStatus::Paused);
-            if let Some(st) = states.lock().unwrap().get(&puzzle_num) {
-                if let Ok(msg) = serde_json::to_string(st) {
-                    let _ = ws_tx.send(msg);
-                }
-            }
             break;
         }
 
-        // Tentukan jumlah worker thread dinamis sesuai device mode (local, vps, gpu)
-        let num_workers = get_optimal_workers(&states, device_mode);
-
-        let search_strategy = std::env::var("SEARCH_STRATEGY")
-            .unwrap_or_else(|_| "stratified".to_string())
-            .to_lowercase();
-
-        // Ambil batch window dengan strategi terpilih:
-        // - 'stratified' (default): Membagi keyspace rata ke 16 sektor dari ujung kiri (0%) sampai ujung kanan (100%),
-        //   sehingga worker tersebar rapi, pinggir kiri & pinggir kanan selalu aktif, dan tidak pernah menumpuk di tengah.
-        // - 'random': Lompatan acak bebas ke seluruh keyspace.
-        let mut batch_windows = Vec::with_capacity(num_workers);
-        for w_idx in 0..num_workers {
-            let (window_id, w_start, w_end) = if search_strategy == "random" {
-                pick_window_smart(
+        // Ambil batch yang SUDAH SIAP di RAM (Instant hand-off, 0ms latency)
+        let current_batch = match prepped_batch.take() {
+            Some(b) => b,
+            None => {
+                let nw = get_optimal_workers(&states, device_mode);
+                round += nw as u64;
+                prepare_batch_windows(
+                    round,
+                    nw,
+                    &mut scanned,
+                    &search_strategy,
                     &full_start,
                     &effective_end,
                     &window_size,
                     &max_window_id,
-                    &scanned,
-                    num_workers as u64,
+                    effective_window_bits,
+                    last_kps,
+                    device_mode,
                 )
-            } else {
-                pick_window_stratified(
-                    w_idx,
-                    num_workers,
-                    &full_start,
-                    &effective_end,
-                    &window_size,
-                    &max_window_id,
-                    &scanned,
-                )
-            };
-            insert_sorted(&mut scanned, (w_start.clone(), w_end.clone()));
-            batch_windows.push((window_id, w_start, w_end));
-        }
-
-        round += num_workers as u64;
-
-        let first_start_hex = format!("0x{:x}", batch_windows[0].1);
-        let first_end_hex = format!("0x{:x}", batch_windows[0].2);
-
-        let active_win_list: Vec<WorkerWindow> = batch_windows
-            .iter()
-            .enumerate()
-            .map(|(idx, (_, ws, we))| WorkerWindow {
-                worker_id: idx + 1,
-                start_hex: format!("0x{:x}", ws),
-                end_hex: format!("0x{:x}", we),
-            })
-            .collect();
-
-        let win_keys = 1u64 << effective_window_bits;
-        let total_round_keys = (num_workers as u64) * win_keys;
-
-        // Estimasi durasi per ronde (detik) berbasis laju nyata KPS, atau fallback default
-        let est_round_secs = if last_kps > 10_000.0 {
-            (total_round_keys as f64 / last_kps).clamp(1.5, 45.0)
-        } else if device_mode == DeviceMode::Gpu {
-            3.8
-        } else {
-            12.0
+            }
         };
+
+        let num_workers = current_batch.num_workers;
+        let total_round_keys = current_batch.total_round_keys;
+        let est_round_secs = current_batch.est_round_secs;
+        let active_win_list = current_batch.active_win_list.clone();
 
         // Fase 1: CPU Dispatching (Grid Worker disiapkan & dialokasikan ke GPU)
         {
             let mut s = states.lock().unwrap();
             if let Some(st) = s.get_mut(&puzzle_num) {
                 st.last_window_hex = if device_mode == DeviceMode::Gpu {
-                    format!("{first_start_hex}..{first_end_hex} (⚡ {num_workers} GPU Workers 2^{})", effective_window_bits)
+                    format!("{}..{} (⚡ {} GPU Workers 2^{})", current_batch.first_start_hex, current_batch.first_end_hex, num_workers, effective_window_bits)
                 } else if num_workers > 1 {
-                    format!("{first_start_hex}..{first_end_hex} (⚡ {num_workers} threads)")
+                    format!("{}..{} (⚡ {} threads)", current_batch.first_start_hex, current_batch.first_end_hex, num_workers)
                 } else {
-                    format!("{first_start_hex}..{first_end_hex}")
+                    format!("{}..{}", current_batch.first_start_hex, current_batch.first_end_hex)
                 };
-                st.round = round;
+                st.round = current_batch.round;
                 st.active_workers = num_workers;
                 st.active_windows = active_win_list.clone();
                 st.device_mode = device_mode.as_str().to_string();
                 st.window_bits = effective_window_bits;
-                st.window_keys = win_keys;
+                st.window_keys = 1u64 << effective_window_bits;
                 st.keys_per_round = total_round_keys;
                 st.round_workers_done = 0;
                 st.round_phase = "dispatching".to_string();
@@ -763,7 +876,6 @@ async fn run_hunt_loop(
                     st.gpu_info = Some(crate::kangaroo::cuda::get_telemetry(num_workers));
                 }
 
-                // Broadcast live update awal ronde agar posisi jump per core langsung bergerak di UI
                 if let Ok(msg) = serde_json::to_string(&*st) {
                     let _ = ws_tx.send(msg);
                 }
@@ -780,7 +892,7 @@ async fn run_hunt_loop(
                 }
                 false
             } else {
-                bitcrack_daemons.len() == batch_windows.len()
+                bitcrack_daemons.len() == current_batch.batch_windows.len()
             }
         } else {
             false
@@ -799,7 +911,6 @@ async fn run_hunt_loop(
         }
 
         // Background smooth ticker: menggerakkan progress bar secara real-time dari 6% hingga 92.5%
-        // dan menghitung laju keys_checked secara dinamis saat GPU/CPU sedang bekerja
         let ticker_cancel = Arc::new(AtomicBool::new(false));
         let ticker_cancel_clone = ticker_cancel.clone();
         let stop_ticker_flag = stop_flag.clone();
@@ -813,7 +924,7 @@ async fn run_hunt_loop(
 
         let ticker_handle = tokio::spawn(async move {
             let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(100));
-            interval.tick().await; // lewati tick pertama
+            interval.tick().await;
             loop {
                 interval.tick().await;
                 if ticker_cancel_clone.load(Ordering::Relaxed)
@@ -824,7 +935,6 @@ async fn run_hunt_loop(
                 }
                 let elapsed = start_compute.elapsed().as_secs_f64();
                 let ratio = (elapsed / ticker_est_secs).min(1.0);
-                // Progres halus 6% -> 92.5%
                 let pct = (6.0 + ratio * 86.5).clamp(6.0, 92.5);
                 let current_keys = ((pct / 100.0) * (ticker_total_round_keys as f64)) as u64;
 
@@ -843,10 +953,29 @@ async fn run_hunt_loop(
             }
         });
 
+        // ⚡ ASYNC CPU DISPATCH PRE-FETCHING (Double Buffering)
+        // Selagi GPU sedang menghitung current_batch, CPU di background langsung menyiapkan next_batch!
+        let next_nw = get_optimal_workers(&states, device_mode);
+        let next_round_num = round + (next_nw as u64);
+        round = next_round_num;
+        prepped_batch = Some(prepare_batch_windows(
+            next_round_num,
+            next_nw,
+            &mut scanned,
+            &search_strategy,
+            &full_start,
+            &effective_end,
+            &window_size,
+            &max_window_id,
+            effective_window_bits,
+            last_kps,
+            device_mode,
+        ));
+
         // Jalankan seluruh worker secara paralel (Gunakan persistent CUDA daemon jika siap, atau fallback standard)
         let done_workers = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let batch_results = if daemons_active {
-            let futs = bitcrack_daemons.iter_mut().zip(batch_windows.iter()).enumerate().map(|(w_idx, (daemon, (win_id, ws, we)))| {
+            let futs = bitcrack_daemons.iter_mut().zip(current_batch.batch_windows.iter()).enumerate().map(|(w_idx, (daemon, (win_id, ws, we)))| {
                 let s_hex = format!("0x{:x}", ws);
                 let e_hex = format!("0x{:x}", we);
                 let stop_inner = stop_flag.clone();
@@ -917,7 +1046,7 @@ async fn run_hunt_loop(
             });
             futures_util::future::join_all(futs).await
         } else {
-            let tasks = batch_windows.into_iter().enumerate().map(|(w_idx, (win_id, ws, we))| {
+            let tasks = current_batch.batch_windows.into_iter().enumerate().map(|(w_idx, (win_id, ws, we))| {
                 let stop_inner = stop_flag.clone();
                 let target_pub = target_pub_bytes;
                 let target_h160 = target_hash160;
@@ -1026,29 +1155,13 @@ async fn run_hunt_loop(
         ticker_cancel.store(true, Ordering::Relaxed);
         let _ = ticker_handle.await;
 
-        // Fase 3: Worker selesai, CPU mengumpulkan hasil & BATCH INSERT ke PostgreSQL
-        {
-            let mut s = states.lock().unwrap();
-            if let Some(st) = s.get_mut(&puzzle_num) {
-                st.round_phase = "committing".to_string();
-                st.round_workers_done = num_workers;
-                st.round_progress_pct = 95.0;
-                st.round_keys_checked = total_round_keys;
-                if let Ok(msg) = serde_json::to_string(&*st) {
-                    let _ = ws_tx.send(msg);
-                }
-            }
-        }
-
         let mut hit_result = None;
         let mut batch_keys: u64 = 0;
         let mut db_records = Vec::with_capacity(batch_results.len());
 
         for (win_id, ws, we, res) in batch_results {
-
             batch_keys += res.keys_checked;
 
-            // Kumpulkan seluruh window yang discan pada ronde ini ke memory buffer
             let s_hex = format!("0x{:x}", ws);
             let e_hex = format!("0x{:x}", we);
             db_records.push(db::NewScannedWindow {
@@ -1065,14 +1178,17 @@ async fn run_hunt_loop(
             }
         }
 
-        // BATCH INSERT: Simpan seluruh window ronde ini dalam 1 query transaksi cepat ke PostgreSQL!
+        // 🚀 ASYNC DB COMMIT: Kirim seluruh riwayat window ke background PostgreSQL committer channel
+        // GPU sama sekali TIDAK DIBLOKIR atau menunggu query SQL selesai!
         if !db_records.is_empty() {
-            if let Err(e) = db::record_scanned_windows_batch(&pool, &db_records).await {
-                tracing::warn!("⚠️ [DB BATCH] Gagal menyimpan batch scanned windows ke PostgreSQL: {e}");
+            if let Err(e) = db_tx.send(db_records).await {
+                tracing::warn!("⚠️ [ASYNC DB COMMIT] Gagal mengirim batch ke channel DB: {e}");
             }
         }
 
         total_keys += batch_keys;
+        actually_scanned_windows += num_workers as u64;
+
         let elapsed_total = session_start.elapsed().as_secs_f64();
         let kps = if elapsed_total > 0.0 {
             total_keys as f64 / elapsed_total
@@ -1081,28 +1197,26 @@ async fn run_hunt_loop(
         };
         last_kps = kps;
 
-        // Fase 4: Batch ronde selesai 100%, commit ke DB tuntas, siap ronde berikutnya
+        // Fase 4: Batch ronde selesai 100%, siap langsung masuk ronde berikutnya
         {
             let mut s = states.lock().unwrap();
             if let Some(st) = s.get_mut(&puzzle_num) {
                 st.round_phase = "completed".to_string();
                 st.total_keys_checked = total_keys;
                 st.keys_per_second = kps;
-                st.windows_scanned = scanned.len() as u64;
+                st.windows_scanned = actually_scanned_windows;
                 st.last_check_at = Some(chrono_now());
                 st.active_workers = num_workers;
                 st.active_windows = active_win_list;
                 st.device_mode = device_mode.as_str().to_string();
-                let win_keys = 1u64 << effective_window_bits;
                 st.window_bits = effective_window_bits;
-                st.window_keys = win_keys;
+                st.window_keys = 1u64 << effective_window_bits;
                 st.keys_per_round = total_round_keys;
                 st.round_workers_done = num_workers;
                 st.round_progress_pct = 100.0;
                 st.round_keys_checked = total_round_keys;
                 st.is_kangaroo_mode = target_pub_bytes.is_some();
 
-                // Broadcast live progress ke WebSocket client
                 if let Ok(msg) = serde_json::to_string(&*st) {
                     let _ = ws_tx.send(msg);
                 }
@@ -1110,29 +1224,12 @@ async fn run_hunt_loop(
         }
 
         // JIKA KUNCI DITEMUKAN OLEH SALAH SATU WORKER!
-        if let Some(result) = hit_result {
-            if let Some(key_biguint) = result.found_key_biguint {
-                let priv_bytes = biguint_to_scalar_32(&key_biguint);
-                let priv_hex = hex::encode(priv_bytes);
-                handle_key_found(&pool, &puzzle, &priv_hex, &destination_address, &states, &ws_tx).await;
-                break;
-            }
+        if hit_result.is_some() {
+            global_hit_result = hit_result;
+            break;
         }
 
-        // On-chain Watchdog berkala
-        if last_check.elapsed().as_secs() >= check_interval_secs {
-            last_check = Instant::now();
-            let onchain = check_puzzle_status(&puzzle.address).await;
-            update_balance(&states, puzzle_num, onchain.balance_sats);
-            if onchain.is_solved {
-                let _ = db::mark_puzzle_solved(&pool, puzzle_num, &onchain.message).await;
-                update_status(&states, puzzle_num, HunterStatus::SolvedByOther);
-                tracing::warn!("🛑 Puzzle #{} telah solved oleh orang lain di on-chain!", puzzle_num);
-                break;
-            }
-        }
-
-        // Opsional jeda istirahat CPU antar ronde jika diatur di .env (misal 50ms-100ms untuk laptop cooling)
+        // Opsional jeda istirahat CPU antar ronde jika diatur di .env
         if let Ok(delay_str) = std::env::var("ROUND_DELAY_MS") {
             if let Ok(ms) = delay_str.trim().parse::<u64>() {
                 if ms > 0 {
@@ -1141,16 +1238,34 @@ async fn run_hunt_loop(
             }
         }
 
-        // Cek sinyal jeda cerdas (Smart Pause) setelah seluruh riwayat window selesai disimpan ke PostgreSQL
+        // Cek sinyal jeda cerdas (Smart Pause)
         if pause_flag.load(Ordering::Relaxed) || stop_flag.load(Ordering::Relaxed) {
-            tracing::info!("⏸️ [SMART PAUSE] Seluruh riwayat window aktif puzzle #{puzzle_num} telah tersimpan di PostgreSQL. Mengubah status hunter ke PAUSED.");
-            update_status(&states, puzzle_num, HunterStatus::Paused);
-            if let Some(st) = states.lock().unwrap().get(&puzzle_num) {
-                if let Ok(msg) = serde_json::to_string(st) {
-                    let _ = ws_tx.send(msg);
-                }
-            }
             break;
+        }
+    }
+
+    // Hentikan on-chain watchdog
+    watchdog_handle.abort();
+
+    // Tutup channel DB dan tunggu sampai seluruh window pending tuntas disimpan ke PostgreSQL
+    drop(db_tx);
+    tracing::info!("⏳ [FLUSH DB COMMIT] Menunggu commit riwayat PostgreSQL di background...");
+    let _ = db_writer_handle.await;
+
+    // JIKA KUNCI DITEMUKAN: Jalankan sweep otomatis via MARA Slipstream!
+    if let Some(result) = global_hit_result {
+        if let Some(key_biguint) = result.found_key_biguint {
+            let priv_bytes = biguint_to_scalar_32(&key_biguint);
+            let priv_hex = hex::encode(priv_bytes);
+            handle_key_found(&pool, &puzzle, &priv_hex, &destination_address, &states, &ws_tx).await;
+        }
+    } else {
+        tracing::info!("⏸️ [SMART PAUSE] Seluruh riwayat window aktif puzzle #{puzzle_num} telah tersimpan di PostgreSQL. Mengubah status hunter ke PAUSED.");
+        update_status(&states, puzzle_num, HunterStatus::Paused);
+        if let Some(st) = states.lock().unwrap().get(&puzzle_num) {
+            if let Ok(msg) = serde_json::to_string(st) {
+                let _ = ws_tx.send(msg);
+            }
         }
     }
 

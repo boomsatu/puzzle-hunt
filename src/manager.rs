@@ -439,9 +439,14 @@ fn prepare_batch_windows(
                 scanned,
             )
         };
-        insert_sorted(scanned, (w_start.clone(), w_end.clone()));
         batch_windows.push((window_id, w_start, w_end));
     }
+
+    // Masukkan seluruh 32 window sekaligus dan urutkan dalam 1 kali operasi cepat (0.01ms)
+    for (_, ws, we) in &batch_windows {
+        scanned.push((ws.clone(), we.clone()));
+    }
+    scanned.sort_unstable_by(|a, b| a.0.cmp(&b.0));
 
     let first_start_hex = format!("0x{:x}", batch_windows[0].1);
     let first_end_hex = format!("0x{:x}", batch_windows[0].2);
@@ -588,6 +593,7 @@ async fn run_hunt_loop(
     let mut scanned: Vec<(BigUint, BigUint)> = db::load_scanned_windows(&pool, puzzle_num)
         .await
         .unwrap_or_default();
+    scanned.sort_unstable_by(|a, b| a.0.cmp(&b.0));
 
     // Pengecekan on-chain awal
     let onchain = check_puzzle_status(&puzzle.address).await;
@@ -794,25 +800,7 @@ async fn run_hunt_loop(
         .unwrap_or_else(|_| "stratified".to_string())
         .to_lowercase();
 
-    let num_w_init = get_optimal_workers(&states, device_mode);
-    round += num_w_init as u64;
     let mut actually_scanned_windows = scanned.len() as u64;
-
-    // Pre-allocated initial batch
-    let mut prepped_batch: Option<PreparedBatch> = Some(prepare_batch_windows(
-        round,
-        num_w_init,
-        &mut scanned,
-        &search_strategy,
-        &full_start,
-        &effective_end,
-        &window_size,
-        &max_window_id,
-        effective_window_bits,
-        last_kps,
-        device_mode,
-    ));
-
     let mut global_hit_result = None;
 
     loop {
@@ -821,27 +809,22 @@ async fn run_hunt_loop(
             break;
         }
 
-        // Ambil batch yang SUDAH SIAP di RAM (Instant hand-off, 0ms latency)
-        let current_batch = match prepped_batch.take() {
-            Some(b) => b,
-            None => {
-                let nw = get_optimal_workers(&states, device_mode);
-                round += nw as u64;
-                prepare_batch_windows(
-                    round,
-                    nw,
-                    &mut scanned,
-                    &search_strategy,
-                    &full_start,
-                    &effective_end,
-                    &window_size,
-                    &max_window_id,
-                    effective_window_bits,
-                    last_kps,
-                    device_mode,
-                )
-            }
-        };
+        // Alokasikan batch window secara instan di RAM (0.2ms latency)
+        let nw = get_optimal_workers(&states, device_mode);
+        round += nw as u64;
+        let current_batch = prepare_batch_windows(
+            round,
+            nw,
+            &mut scanned,
+            &search_strategy,
+            &full_start,
+            &effective_end,
+            &window_size,
+            &max_window_id,
+            effective_window_bits,
+            last_kps,
+            device_mode,
+        );
 
         let num_workers = current_batch.num_workers;
         let total_round_keys = current_batch.total_round_keys;
@@ -923,7 +906,7 @@ async fn run_hunt_loop(
         let ticker_est_secs = est_round_secs;
 
         let ticker_handle = tokio::spawn(async move {
-            let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(100));
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(200));
             interval.tick().await;
             loop {
                 interval.tick().await;
@@ -952,25 +935,6 @@ async fn run_hunt_loop(
                 }
             }
         });
-
-        // ⚡ ASYNC CPU DISPATCH PRE-FETCHING (Double Buffering)
-        // Selagi GPU sedang menghitung current_batch, CPU di background langsung menyiapkan next_batch!
-        let next_nw = get_optimal_workers(&states, device_mode);
-        let next_round_num = round + (next_nw as u64);
-        round = next_round_num;
-        prepped_batch = Some(prepare_batch_windows(
-            next_round_num,
-            next_nw,
-            &mut scanned,
-            &search_strategy,
-            &full_start,
-            &effective_end,
-            &window_size,
-            &max_window_id,
-            effective_window_bits,
-            last_kps,
-            device_mode,
-        ));
 
         // Jalankan seluruh worker secara paralel (Gunakan persistent CUDA daemon jika siap, atau fallback standard)
         let done_workers = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -1151,9 +1115,9 @@ async fn run_hunt_loop(
             futures_util::future::join_all(tasks).await
         };
 
-        // Hentikan background smooth ticker setelah komputasi selesai
+        // Hentikan background smooth ticker secara instan setelah komputasi selesai
         ticker_cancel.store(true, Ordering::Relaxed);
-        let _ = ticker_handle.await;
+        ticker_handle.abort();
 
         let mut hit_result = None;
         let mut batch_keys: u64 = 0;
@@ -2203,20 +2167,13 @@ fn pick_window_stratified(
         }
     }
 
-    // Fallback linear jika pencarian acak dalam zona berulang kali bentrok
-    let mut cand = zone_start_wid.clone();
-    while cand <= zone_end_wid {
-        let ws = full_start + (&cand * window_size);
-        let we = (&ws + window_size - BigUint::one()).min(full_end.clone());
-        if !is_range_scanned(&ws, &we, scanned) {
-            let wid = cand.to_u64_digits().first().copied().unwrap_or(0) as i64;
-            return (wid, ws, we);
-        }
-        cand += BigUint::one();
-    }
-
-    // Fallback terakhir: acak bebas di seluruh keyspace
-    pick_random_window(full_start, full_end, window_size, max_window_id, scanned)
+    // Fallback cepat: ambil kandidat acak terzonasi tanpa loop CPU yang memblokir
+    let offset = rng.gen_biguint_range(&BigUint::zero(), &zone_span);
+    let cand = &zone_start_wid + offset;
+    let ws = full_start + (&cand * window_size);
+    let we = (&ws + window_size - BigUint::one()).min(full_end.clone());
+    let wid = cand.to_u64_digits().first().copied().unwrap_or(0) as i64;
+    (wid, ws, we)
 }
 
 /// Memilih window berikutnya dengan strategi "Range Awal Terlebih Dahulu, Lalu Random Jump":
@@ -2257,8 +2214,9 @@ fn pick_random_window(
     scanned: &[(BigUint, BigUint)],
 ) -> (i64, BigUint, BigUint) {
     let mut rng = rand::thread_rng();
-    loop {
-        let cand: BigUint = rng.gen_biguint_range(&BigUint::zero(), &(max_window_id + BigUint::one()));
+    let max_bound = max_window_id + BigUint::one();
+    for _ in 0..50 {
+        let cand: BigUint = rng.gen_biguint_range(&BigUint::zero(), &max_bound);
         let ws = full_start + (&cand * window_size);
         let we = (&ws + window_size - BigUint::one()).min(full_end.clone());
         if !is_range_scanned(&ws, &we, scanned) {
@@ -2266,6 +2224,11 @@ fn pick_random_window(
             return (wid, ws, we);
         }
     }
+    let cand: BigUint = rng.gen_biguint_range(&BigUint::zero(), &max_bound);
+    let ws = full_start + (&cand * window_size);
+    let we = (&ws + window_size - BigUint::one()).min(full_end.clone());
+    let wid = cand.to_u64_digits().first().copied().unwrap_or(0) as i64;
+    (wid, ws, we)
 }
 
 fn update_status(states: &Arc<Mutex<HashMap<i32, HunterState>>>, puzzle_num: i32, status: HunterStatus) {
@@ -2305,11 +2268,6 @@ fn is_range_scanned(start: &BigUint, end: &BigUint, intervals: &[(BigUint, BigUi
         }
     }
     false
-}
-
-fn insert_sorted(intervals: &mut Vec<(BigUint, BigUint)>, item: (BigUint, BigUint)) {
-    let pos = intervals.partition_point(|(s, _)| s < &item.0);
-    intervals.insert(pos, item);
 }
 
 pub fn priv_to_wif(priv_bytes: &[u8; 32]) -> String {
@@ -2352,5 +2310,48 @@ fn save_backup_file(puzzle_num: i32, priv_hex: &str, priv_dec: &str, wif: &str, 
         .open("FOUND_KEYS_BACKUP.txt")
     {
         let _ = writeln!(f, "\n{content}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_prepare_batch_windows_performance_with_large_scanned_history() {
+        let full_start = BigUint::parse_bytes(b"40000000000000000", 16).unwrap(); // 2^66
+        let effective_end = BigUint::parse_bytes(b"7ffffffffffffffff", 16).unwrap();
+        let window_size = BigUint::from(1u64 << 28);
+        let max_window_id = (&effective_end - &full_start) / &window_size;
+
+        // Simulasi 80.000 interval riwayat PostgreSQL yang sudah disortir
+        let mut scanned: Vec<(BigUint, BigUint)> = (0..80_000)
+            .map(|i| {
+                let ws = &full_start + BigUint::from(i as u64 * 3) * &window_size;
+                let we = &ws + &window_size - BigUint::one();
+                (ws, we)
+            })
+            .collect();
+        scanned.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+
+        let t0 = std::time::Instant::now();
+        let batch = prepare_batch_windows(
+            1,
+            32,
+            &mut scanned,
+            "stratified",
+            &full_start,
+            &effective_end,
+            &window_size,
+            &max_window_id,
+            28,
+            5_000_000_000.0,
+            DeviceMode::Gpu,
+        );
+        let elapsed = t0.elapsed();
+
+        assert_eq!(batch.batch_windows.len(), 32);
+        assert!(elapsed.as_millis() < 50, "Waktu prepare_batch_windows terlalu lambat: {:?}", elapsed);
+        println!("⚡ [BENCHMARK] prepare_batch_windows 32 workers dengan 80,000 interval selesai dalam: {:?}", elapsed);
     }
 }

@@ -347,7 +347,36 @@ mod kangaroo_tests {
         let parsed = extract_key_from_text(unpadded_solver);
         assert_eq!(parsed.as_deref(), Some(expected_key), "Format 5 (Unpadded hex) gagal diekstrak atau dinormalisasi!");
 
+        // Anti-False-Positive Test: Pastikan baris log "Starting at: ..." dan "Ending at: ..." DITOLAK
+        let startup_log = "[Info] Starting at: 00000000000000000000000000000000000000000000000041a9b5447900000000\n[Info] Ending at:   00000000000000000000000000000000000000000000000041a9b5447903ffffff";
+        let false_cand = extract_key_from_text(startup_log);
+        assert!(false_cand.is_none(), "Log startup Starting/Ending at seharusnya TIDAK dianggap sebagai kunci!");
+
         println!("✅ [Extract Key PASS] Semua 5 format output cuBitCrack terverifikasi 100% akurat tanpa celah!");
+    }
+
+    // ─── Test 11: Verifikasi Kriptografis Mutlak Private Key vs Target Address ─
+    #[test]
+    fn test_verify_private_key_matches_address() {
+        use crate::kangaroo::verify_private_key_matches_address;
+
+        // 1. Puzzle #20 valid test
+        let p20_priv = BigUint::from(0xd2c55u64);
+        let p20_addr = "1HsMJxNiV7TLxmoF6uJNkydxPFDog4NQum";
+        assert!(
+            verify_private_key_matches_address(&p20_priv, p20_addr),
+            "Kunci valid Puzzle #20 harus lolos verifikasi kriptografis!"
+        );
+
+        // 2. False Positive (kunci sembarang / range start) test
+        let false_key = BigUint::parse_bytes(b"41a9b5447900000000", 16).unwrap();
+        let target_p71 = "1PWo3JeB9jrGwfHDNpdGK54CRas7fsVzXU";
+        assert!(
+            !verify_private_key_matches_address(&false_key, target_p71),
+            "False-positive key 0x41a9b5447900000000 harus DITOLAK untuk Puzzle #71!"
+        );
+
+        println!("✅ [Crypto Verify PASS] Verifikasi alamat secp256k1 sukses: loloskan kunci asli dan tolak 100% false-positive!");
     }
 }
 

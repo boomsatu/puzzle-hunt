@@ -1731,6 +1731,18 @@ async fn handle_key_found(
     priv_bytes.copy_from_slice(&priv_bytes_vec);
 
     let key_biguint = BigUint::from_bytes_be(&priv_bytes);
+
+    // VERIFIKASI KRIPTOGRAFIS INTEGRITAS MUTLAK:
+    // Pastikan private key ini benar-benar menghasilkan Bitcoin address dari puzzle target!
+    // Jika tidak cocok (misal false positive dari teks log), BATALKAN SEKETIKA tanpa sweep atau notifikasi palsu!
+    if !crate::kangaroo::verify_private_key_matches_address(&key_biguint, &puzzle.address) {
+        tracing::error!(
+            "🛑 [INTEGRITY REJECT] Kunci 0x{priv_hex} DITOLAK! Kunci ini TIDAK menghasilkan address target {} (False-Positive Tereliminasi).",
+            puzzle.address
+        );
+        return;
+    }
+
     let priv_dec = key_biguint.to_string();
     let wif = priv_to_wif(&priv_bytes);
 

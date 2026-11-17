@@ -340,24 +340,16 @@ pub fn run_cuda_solver(
 
 /// Mengekstrak private key hex dari output solver text (baik format file cuBitCrack, stdout, atau daemon)
 pub fn extract_key_from_text(text: &str) -> Option<String> {
-    let lower = text.to_lowercase();
-    for marker in &["private key", "priv (hex)", "privkey", "priv", "found key", "found"] {
-        if let Some(idx) = lower.find(marker) {
-            let after = &text[idx + marker.len()..];
-            let trimmed = after.trim_start_matches(|c: char| c.is_whitespace() || c == ':' || c == '=');
-            for word in trimmed.split_whitespace() {
-                let clean = word.trim().trim_start_matches("0x").trim_matches(|c| c == '[' || c == ']' || c == '(' || c == ')' || c == '"' || c == '\'');
-                if !clean.is_empty() && clean.len() <= 64 && clean.chars().all(|c| c.is_ascii_hexdigit()) {
-                    let padded = format!("{:0>64}", clean.to_lowercase());
-                    return Some(padded);
-                }
-            }
-        }
-    }
-
-    // Format file output resmi BitCrack: "<Address> <PrivateKeyHex> <PublicKeyHex>"
+    // 1. Format file output resmi BitCrack: "<Address> <PrivateKeyHex> <PublicKeyHex>"
     for line in text.lines() {
-        let parts: Vec<&str> = line.split_whitespace().collect();
+        let trimmed_line = line.trim();
+        let lower_line = trimmed_line.to_lowercase();
+        // Lewati baris log startup biasa ("Starting at: ...", "Ending at: ...")
+        if lower_line.contains("starting at") || lower_line.contains("ending at") {
+            continue;
+        }
+
+        let parts: Vec<&str> = trimmed_line.split_whitespace().collect();
         if parts.len() >= 2 {
             let p0 = parts[0];
             let p1 = parts[1].trim_start_matches("0x").trim_matches(|c| c == '[' || c == ']' || c == '(' || c == ')');
@@ -372,12 +364,28 @@ pub fn extract_key_from_text(text: &str) -> Option<String> {
         }
     }
 
-    for word in text.split_whitespace() {
-        let clean = word.trim().trim_start_matches("0x").trim_matches(|c| c == '[' || c == ']' || c == '(' || c == ')' || c == '"' || c == '\'');
-        if clean.len() == 64 && clean.chars().all(|c| c.is_ascii_hexdigit()) {
-            return Some(clean.to_lowercase());
+    // 2. Cek baris per baris dengan marker eksplisit (seperti "private key:", "found key:", dll)
+    for line in text.lines() {
+        let lower_line = line.to_lowercase();
+        if lower_line.contains("starting at") || lower_line.contains("ending at") {
+            continue;
+        }
+
+        for marker in &["private key", "priv (hex)", "privkey", "priv", "found key", "found"] {
+            if let Some(idx) = lower_line.find(marker) {
+                let after = &line[idx + marker.len()..];
+                let trimmed = after.trim_start_matches(|c: char| c.is_whitespace() || c == ':' || c == '=');
+                for word in trimmed.split_whitespace() {
+                    let clean = word.trim().trim_start_matches("0x").trim_matches(|c| c == '[' || c == ']' || c == '(' || c == ')' || c == '"' || c == '\'');
+                    if !clean.is_empty() && clean.len() <= 64 && clean.chars().all(|c| c.is_ascii_hexdigit()) {
+                        let padded = format!("{:0>64}", clean.to_lowercase());
+                        return Some(padded);
+                    }
+                }
+            }
         }
     }
+
     None
 }
 
@@ -458,7 +466,12 @@ pub fn run_cuda_bitcrack_window(
     if let Ok(content) = std::fs::read_to_string(&out_file) {
         if let Some(key_hex) = extract_key_from_text(&content) {
             if let Some(cand) = BigUint::parse_bytes(key_hex.as_bytes(), 16) {
-                found_key = Some(cand);
+                // Verifikasi Kriptografis Mutlak: pastikan private key benar-benar menghasilkan target_address
+                if crate::kangaroo::verify_private_key_matches_address(&cand, target_address) {
+                    found_key = Some(cand);
+                } else {
+                    tracing::warn!("⚠️ [FALSE POSITIVE REJECTED] Output file cuBitCrack menghasilkan kunci 0x{key_hex} yang TIDAK cocok dengan address target {target_address}!");
+                }
             }
         }
         let _ = std::fs::remove_file(&out_file);
@@ -476,7 +489,12 @@ pub fn run_cuda_bitcrack_window(
         }
         if let Some(key_hex) = extract_key_from_text(&out_str) {
             if let Some(cand) = BigUint::parse_bytes(key_hex.as_bytes(), 16) {
-                found_key = Some(cand);
+                // Verifikasi Kriptografis Mutlak
+                if crate::kangaroo::verify_private_key_matches_address(&cand, target_address) {
+                    found_key = Some(cand);
+                } else {
+                    tracing::warn!("⚠️ [FALSE POSITIVE REJECTED] Output stream cuBitCrack menghasilkan kunci 0x{key_hex} yang TIDAK cocok dengan address target {target_address}!");
+                }
             }
         }
     }
@@ -496,6 +514,7 @@ pub fn run_cuda_bitcrack_window(
 pub struct CudaBitcrackDaemon {
     pub worker_id: usize,
     pub gpu_id: usize,
+    pub target_address: String,
     child: tokio::process::Child,
     stdin: tokio::process::ChildStdin,
     stdout_lines: tokio::io::Lines<tokio::io::BufReader<tokio::process::ChildStdout>>,
@@ -551,6 +570,7 @@ impl CudaBitcrackDaemon {
         Ok(Self {
             worker_id,
             gpu_id,
+            target_address: target_address.to_string(),
             child,
             stdin,
             stdout_lines,
@@ -586,7 +606,12 @@ impl CudaBitcrackDaemon {
                                 let parts: Vec<&str> = trimmed.split_whitespace().collect();
                                 if parts.len() >= 2 {
                                     if let Some(key) = BigUint::parse_bytes(parts[1].as_bytes(), 16) {
-                                        return Ok(KangarooResult::hit(key, 1, t_start.elapsed().as_secs_f64()));
+                                        // Verifikasi kriptografis
+                                        if crate::kangaroo::verify_private_key_matches_address(&key, &self.target_address) {
+                                            return Ok(KangarooResult::hit(key, 1, t_start.elapsed().as_secs_f64()));
+                                        } else {
+                                            tracing::warn!("⚠️ [DAEMON FALSE POSITIVE REJECTED] Daemon melaporkan key 0x{:x} tapi tidak cocok dengan {}!", key, self.target_address);
+                                        }
                                     }
                                 }
                             } else if trimmed.starts_with("DONE") {

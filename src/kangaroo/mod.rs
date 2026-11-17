@@ -80,6 +80,36 @@ pub fn biguint_to_scalar_32(n: &BigUint) -> [u8; 32] {
     out
 }
 
+/// Memvalidasi secara kriptografis (secp256k1 EC scalar multiplication) apakah private key
+/// benar-benar menghasilkan Bitcoin address target (P2PKH Hash160).
+/// Memeriksa baik format Compressed (modern) maupun Uncompressed (legacy).
+/// Menolak 100% false-positive (seperti teks log startup 'Starting at: ...' atau data sampah).
+pub fn verify_private_key_matches_address(priv_key: &BigUint, target_address: &str) -> bool {
+    let Ok(target_h160) = address_to_hash160(target_address) else {
+        return false;
+    };
+
+    let scalar_bytes = biguint_to_scalar_32(priv_key);
+    let secp = Secp256k1::new();
+    let Ok(sk) = SecretKey::from_slice(&scalar_bytes) else {
+        return false;
+    };
+
+    // 1. Cek Compressed Public Key (Standard modern Bitcoin)
+    let pk_comp = sk.public_key(&secp).serialize();
+    if hash160(&pk_comp) == target_h160 {
+        return true;
+    }
+
+    // 2. Cek Uncompressed Public Key (Legacy Bitcoin)
+    let pk_uncomp = sk.public_key(&secp).serialize_uncompressed();
+    if hash160(&pk_uncomp) == target_h160 {
+        return true;
+    }
+
+    false
+}
+
 pub fn u64_to_scalar_32(n: u64) -> [u8; 32] {
     let mut out = [0u8; 32];
     out[24..].copy_from_slice(&n.to_be_bytes());

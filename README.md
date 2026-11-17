@@ -15,6 +15,7 @@
 ## 📑 Daftar Isi
 
 - [1. Arsitektur & Spesifikasi Sistem](#1-arsitektur--spesifikasi-sistem)
+- [⚡ JALUR CEPAT: 1-Click Automated Setup (`setup_gpu.sh`)](#-jalur-cepat-1-click-automated-setup-setup_gpush)
 - [2. Langkah 1: Provisioning Instance GPU Cloud Baru](#2-langkah-1-provisioning-instance-gpu-cloud-baru)
 - [3. Langkah 2: Instalasi Dependensi Dasar Linux & Rust](#3-langkah-2-instalasi-dependensi-dasar-linux--rust)
 - [4. Langkah 3: Setup Database PostgreSQL (Docker Container)](#4-langkah-3-setup-database-postgresql-docker-container)
@@ -73,6 +74,44 @@
 ```
 
 ---
+
+## ⚡ JALUR CEPAT: 1-Click Automated Setup (`setup_gpu.sh`)
+
+Jika Anda baru saja menyewa instance GPU baru di **Vast.ai**, **RunPod**, atau dedicated server Ubuntu lainnya, Anda **TIDAK PERLU** menjalankan perintah manual satu per satu! Repositori ini sudah dilengkapi script all-in-one [`setup_gpu.sh`](setup_gpu.sh) yang otomatis mengurus segalanya dari nol.
+
+### Cukup 4 Perintah Cepat:
+
+```bash
+# 1. Clone repository proyek & masuk ke folder
+git clone https://github.com/boomsatu/puzzle-hunt.git
+cd puzzle-hunt
+
+# 2. Jalankan script setup otomatis (mengurus dependensi, Rust, Docker Postgres, .env, cuBitCrack, & build backend)
+bash setup_gpu.sh
+
+# 3. Jalankan Cloudflare Tunnel Token & Auto-Backup Daemon
+nohup cloudflared tunnel run --token <TOKEN_CLOUDFLARE_ANDA> > logs/cloudflared.log 2>&1 &
+python3 auto_backup_filebase.py --start
+
+# 4. Jalankan Hunter Engine (Daemon Background — Aman tutup terminal SSH!)
+bash start_gpu.sh
+```
+
+> [!TIP]
+> **Apa saja yang otomatis dikerjakan oleh `bash setup_gpu.sh`?**
+> 1. ✅ **Deteksi GPU**: Memeriksa nama GPU, VRAM, dan versi driver NVIDIA via `nvidia-smi`.
+> 2. ✅ **Dependensi Linux**: Memasang paket `build-essential`, `cmake`, `libssl-dev`, `clang`, `docker`, `nvtop`, `htop`, dll.
+> 3. ✅ **Rust Compiler**: Mengunduh dan memasang `rustup` & `cargo` stable terbaru.
+> 4. ✅ **Konfigurasi .env**: Mengonfigurasi `HUNT_MODE=gpu`, `HOST=0.0.0.0`, dan membuat token `AUTH_SECRET` acak.
+> 5. ✅ **Database PostgreSQL**: Menyalakan container Docker `puzzle_postgres` dengan volume persistence & seeding data awal.
+> 6. ✅ **Kompilasi cuBitCrack**: Mengompilasi solver GPU CUDA (native Blackwell `sm_120`, Ada `sm_89`, Ampere `sm_86`) ke `bin/cuBitCrack`.
+> 7. ✅ **Build Backend**: Mengompilasi binary backend Rust release mode berkecepatan tinggi (`target/release/puzzle-hunt`).
+
+---
+
+## 📖 Panduan Rinci & Penjelasan Manual Tiap Komponen
+
+Jika Anda ingin memahami detail arsitektur, mengubah konfigurasi secara spesifik, atau melakukan debugging manual per komponen, ikuti langkah-langkah di bawah ini:
 
 ## 2. Langkah 1: Provisioning Instance GPU Cloud Baru
 

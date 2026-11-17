@@ -291,19 +291,34 @@ export const PuzzleCard: React.FC<PuzzleCardProps> = ({ puzzle, hunter, destinat
 
                 {/* Live Round Batch Progress Bar */}
                 {hunter.keys_per_round && hunter.keys_per_round > 0 && isRunning && (
-                  <div className="mt-2 pt-2 border-t border-slate-800/60 space-y-1">
-                    <div className="flex items-center justify-between text-[10px] font-mono">
-                      <span className="flex items-center gap-1 text-cyan-300 font-semibold">
+                  <div className="mt-2 pt-2 border-t border-slate-800/60 space-y-1.5">
+                    <div className="flex items-center justify-between text-[10px] font-mono flex-wrap gap-1">
+                      <span className="flex items-center gap-1.5 text-cyan-300 font-semibold">
                         <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-ping"></span>
                         Ronde #{hunter.round}: {(hunter.round_progress_pct || 0).toFixed(0)}%
+                        {hunter.round_phase === 'dispatching' && (
+                          <span className="text-[9px] px-1 py-0.2 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30">CPU</span>
+                        )}
+                        {hunter.round_phase === 'computing' && (
+                          <span className="text-[9px] px-1 py-0.2 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30 animate-pulse">GPU</span>
+                        )}
+                        {hunter.round_phase === 'committing' && (
+                          <span className="text-[9px] px-1 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">DB</span>
+                        )}
                       </span>
                       <span className="text-slate-400">
                         ~{formatCompactKeys(hunter.round_keys_checked || 0)} / {formatCompactKeys(hunter.keys_per_round)}
                       </span>
                     </div>
-                    <div className="h-1.5 bg-slate-900 rounded-full border border-slate-800 overflow-hidden">
+                    <div className="h-2 bg-slate-900 rounded-full border border-slate-800 overflow-hidden">
                       <div
-                        className="h-full bg-gradient-to-r from-blue-500 to-cyan-400 rounded-full transition-all duration-300 ease-out"
+                        className={`h-full rounded-full transition-all duration-150 ease-out ${
+                          hunter.round_phase === 'committing'
+                            ? 'bg-gradient-to-r from-purple-500 to-amber-400'
+                            : hunter.round_phase === 'completed'
+                            ? 'bg-gradient-to-r from-cyan-500 to-emerald-400'
+                            : 'bg-gradient-to-r from-blue-500 via-purple-500 to-cyan-400'
+                        }`}
                         style={{ width: `${Math.min(100, Math.max(hunter.round_progress_pct || 0, 3))}%` }}
                       />
                     </div>

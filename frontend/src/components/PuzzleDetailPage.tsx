@@ -719,21 +719,47 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
                 {hunter.last_window_hex}
               </div>
 
-              {/* Live Round Batch Progress (Kunci & Persen per Ronde Aktif) */}
+              {/* Live Round Batch Progress (Kunci & Persen per Ronde Aktif dengan Multi-Phase GPU/CPU/DB) */}
               {hunter && hunter.keys_per_round && hunter.keys_per_round > 0 && isRunning && (
-                <div className="p-3 bg-gradient-to-r from-cyan-950/40 via-slate-950/70 to-blue-950/40 rounded-xl border border-cyan-500/30 space-y-2 shadow-md shadow-cyan-950/20">
+                <div className="p-3.5 bg-gradient-to-r from-cyan-950/40 via-slate-950/80 to-blue-950/40 rounded-xl border border-cyan-500/30 space-y-2.5 shadow-lg shadow-cyan-950/30">
                   <div className="flex items-center justify-between text-xs flex-wrap gap-2">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-ping"></span>
                       <span className="font-extrabold text-white text-xs tracking-wide">
-                        ⚡ PROGRES BATCH RONDE #{hunter.round || 1}
+                        ⚡ BATCH RONDE #{hunter.round || 1}
                       </span>
                       <span className="text-[11px] text-cyan-300 font-bold bg-cyan-500/15 px-2 py-0.5 rounded-full border border-cyan-500/30">
-                        {hunter.active_workers || 1} Worker Aktif
+                        {hunter.active_workers || 1} Worker
                       </span>
+
+                      {/* Phase Status Badge */}
+                      {hunter.round_phase === 'dispatching' && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-500/20 text-blue-300 border border-blue-500/40 animate-pulse">
+                          <Cpu className="w-3 h-3 text-blue-400" />
+                          1. CPU Dispatch
+                        </span>
+                      )}
+                      {hunter.round_phase === 'computing' && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-500/25 text-purple-200 border border-purple-500/50 shadow-sm shadow-purple-500/20 animate-pulse">
+                          <Zap className="w-3 h-3 text-purple-400" />
+                          2. GPU CUDA Computing
+                        </span>
+                      )}
+                      {hunter.round_phase === 'committing' && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/25 text-amber-200 border border-amber-500/50 shadow-sm shadow-amber-500/20 animate-pulse">
+                          <Database className="w-3 h-3 text-amber-400" />
+                          3. PostgreSQL Commit
+                        </span>
+                      )}
+                      {hunter.round_phase === 'completed' && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                          <CheckCircle className="w-3 h-3 text-emerald-400" />
+                          Selesai
+                        </span>
+                      )}
                     </div>
                     <div className="flex items-center gap-2 text-xs font-mono font-bold">
-                      <span className="text-cyan-400 text-sm">
+                      <span className="text-cyan-400 text-sm font-extrabold">
                         {(hunter.round_progress_pct || 0).toFixed(1)}%
                       </span>
                       <span className="text-slate-500">•</span>
@@ -743,15 +769,55 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
                     </div>
                   </div>
 
-                  {/* Visual Live Progress Bar */}
-                  <div className="relative h-3 bg-slate-950 rounded-full border border-slate-800 overflow-hidden shadow-inner">
+                  {/* 3-Stage Mini Stepper */}
+                  <div className="grid grid-cols-3 gap-1.5 text-[10px] font-medium">
+                    <div className={`flex items-center justify-center gap-1 py-1 px-1.5 rounded border transition-all ${
+                      hunter.round_phase === 'dispatching'
+                        ? 'bg-blue-500/20 border-blue-500/50 text-blue-300 font-bold shadow-sm shadow-blue-500/20'
+                        : (hunter.round_phase === 'computing' || hunter.round_phase === 'committing' || hunter.round_phase === 'completed')
+                        ? 'bg-slate-900/60 border-slate-700/60 text-slate-400'
+                        : 'bg-slate-900/40 border-slate-800 text-slate-500'
+                    }`}>
+                      <Cpu className="w-2.5 h-2.5" />
+                      <span>1. CPU Dispatch</span>
+                    </div>
+                    <div className={`flex items-center justify-center gap-1 py-1 px-1.5 rounded border transition-all ${
+                      hunter.round_phase === 'computing'
+                        ? 'bg-purple-500/25 border-purple-500/50 text-purple-200 font-bold shadow-sm shadow-purple-500/20 animate-pulse'
+                        : (hunter.round_phase === 'committing' || hunter.round_phase === 'completed')
+                        ? 'bg-slate-900/60 border-slate-700/60 text-slate-400'
+                        : 'bg-slate-900/40 border-slate-800 text-slate-500'
+                    }`}>
+                      <Zap className="w-2.5 h-2.5" />
+                      <span>2. GPU CUDA (~{formatCompactKeys(hunter.keys_per_round)})</span>
+                    </div>
+                    <div className={`flex items-center justify-center gap-1 py-1 px-1.5 rounded border transition-all ${
+                      hunter.round_phase === 'committing'
+                        ? 'bg-amber-500/25 border-amber-500/50 text-amber-200 font-bold shadow-sm shadow-amber-500/20 animate-pulse'
+                        : hunter.round_phase === 'completed'
+                        ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300 font-bold'
+                        : 'bg-slate-900/40 border-slate-800 text-slate-500'
+                    }`}>
+                      <Database className="w-2.5 h-2.5" />
+                      <span>3. Postgres Commit</span>
+                    </div>
+                  </div>
+
+                  {/* Visual Live Progress Bar dengan transisi halus 150ms */}
+                  <div className="relative h-3.5 bg-slate-950 rounded-full border border-slate-800 overflow-hidden shadow-inner">
                     <div
-                      className="h-full bg-gradient-to-r from-blue-500 via-indigo-500 to-cyan-400 rounded-full transition-all duration-300 ease-out"
+                      className={`h-full rounded-full transition-all duration-150 ease-out ${
+                        hunter.round_phase === 'committing'
+                          ? 'bg-gradient-to-r from-purple-500 via-amber-500 to-yellow-400'
+                          : hunter.round_phase === 'completed'
+                          ? 'bg-gradient-to-r from-cyan-500 to-emerald-400'
+                          : 'bg-gradient-to-r from-blue-600 via-purple-500 to-cyan-400'
+                      }`}
                       style={{ width: `${Math.min(100, Math.max(hunter.round_progress_pct || 0, isRunning ? 2 : 0))}%` }}
                     />
                     {hunter.round_progress_pct && hunter.round_progress_pct > 0 ? (
                       <div
-                        className="absolute inset-y-0 w-2.5 bg-cyan-300/80 rounded-full blur-sm"
+                        className="absolute inset-y-0 w-3 bg-cyan-300/80 rounded-full blur-sm"
                         style={{ left: `${Math.min(99, Math.max(0, (hunter.round_progress_pct || 0) - 1))}%` }}
                       />
                     ) : null}
@@ -770,6 +836,9 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
                     </div>
                     <div className="flex items-center gap-2 text-slate-400">
                       <span>Window: <strong>2^{hunter.window_bits || 30}</strong> ({formatCompactKeys(hunter.window_keys || 0)}/worker)</span>
+                      {hunter.round_duration_est_secs && hunter.round_duration_est_secs > 0 ? (
+                        <span className="text-slate-500">• ~{hunter.round_duration_est_secs.toFixed(1)}s/ronde</span>
+                      ) : null}
                     </div>
                   </div>
                 </div>

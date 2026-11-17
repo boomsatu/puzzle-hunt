@@ -95,6 +95,10 @@ pub struct HunterState {
     #[serde(default)]
     pub round_workers_done: usize,
     #[serde(default)]
+    pub round_phase: String,
+    #[serde(default)]
+    pub round_duration_est_secs: f64,
+    #[serde(default)]
     pub is_kangaroo_mode: bool,
 }
 
@@ -130,6 +134,8 @@ impl HunterState {
             round_keys_checked: 0,
             round_progress_pct: 0.0,
             round_workers_done: 0,
+            round_phase: "idle".to_string(),
+            round_duration_est_secs: 0.0,
             is_kangaroo_mode: false,
         }
     }
@@ -561,6 +567,7 @@ async fn run_hunt_loop(
 
     let mut round: u64 = 0;
     let mut total_keys: u64 = 0;
+    let mut last_kps: f64 = 0.0;
     let mut last_check = Instant::now();
     let session_start = Instant::now();
 
@@ -716,7 +723,19 @@ async fn run_hunt_loop(
             })
             .collect();
 
-        // Update status in-memory untuk live dashboard
+        let win_keys = 1u64 << effective_window_bits;
+        let total_round_keys = (num_workers as u64) * win_keys;
+
+        // Estimasi durasi per ronde (detik) berbasis laju nyata KPS, atau fallback default
+        let est_round_secs = if last_kps > 10_000.0 {
+            (total_round_keys as f64 / last_kps).clamp(1.5, 45.0)
+        } else if device_mode == DeviceMode::Gpu {
+            3.8
+        } else {
+            12.0
+        };
+
+        // Fase 1: CPU Dispatching (Grid Worker disiapkan & dialokasikan ke GPU)
         {
             let mut s = states.lock().unwrap();
             if let Some(st) = s.get_mut(&puzzle_num) {
@@ -731,12 +750,13 @@ async fn run_hunt_loop(
                 st.active_workers = num_workers;
                 st.active_windows = active_win_list.clone();
                 st.device_mode = device_mode.as_str().to_string();
-                let win_keys = 1u64 << effective_window_bits;
                 st.window_bits = effective_window_bits;
                 st.window_keys = win_keys;
-                st.keys_per_round = (num_workers as u64) * win_keys;
+                st.keys_per_round = total_round_keys;
                 st.round_workers_done = 0;
-                st.round_progress_pct = 0.0;
+                st.round_phase = "dispatching".to_string();
+                st.round_duration_est_secs = est_round_secs;
+                st.round_progress_pct = 4.0;
                 st.round_keys_checked = 0;
                 st.is_kangaroo_mode = target_pub_bytes.is_some();
                 if device_mode == DeviceMode::Gpu {
@@ -765,6 +785,63 @@ async fn run_hunt_loop(
         } else {
             false
         };
+
+        // Fase 2: GPU/CPU Computing (Transisi ke komputasi paralel worker)
+        {
+            let mut s = states.lock().unwrap();
+            if let Some(st) = s.get_mut(&puzzle_num) {
+                st.round_phase = "computing".to_string();
+                st.round_progress_pct = 6.0;
+                if let Ok(msg) = serde_json::to_string(&*st) {
+                    let _ = ws_tx.send(msg);
+                }
+            }
+        }
+
+        // Background smooth ticker: menggerakkan progress bar secara real-time dari 6% hingga 92.5%
+        // dan menghitung laju keys_checked secara dinamis saat GPU/CPU sedang bekerja
+        let ticker_cancel = Arc::new(AtomicBool::new(false));
+        let ticker_cancel_clone = ticker_cancel.clone();
+        let stop_ticker_flag = stop_flag.clone();
+        let pause_ticker_flag = pause_flag.clone();
+        let states_ticker = states.clone();
+        let ws_tx_ticker = ws_tx.clone();
+        let p_num_ticker = puzzle_num;
+        let start_compute = Instant::now();
+        let ticker_total_round_keys = total_round_keys;
+        let ticker_est_secs = est_round_secs;
+
+        let ticker_handle = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(100));
+            interval.tick().await; // lewati tick pertama
+            loop {
+                interval.tick().await;
+                if ticker_cancel_clone.load(Ordering::Relaxed)
+                    || stop_ticker_flag.load(Ordering::Relaxed)
+                    || pause_ticker_flag.load(Ordering::Relaxed)
+                {
+                    break;
+                }
+                let elapsed = start_compute.elapsed().as_secs_f64();
+                let ratio = (elapsed / ticker_est_secs).min(1.0);
+                // Progres halus 6% -> 92.5%
+                let pct = (6.0 + ratio * 86.5).clamp(6.0, 92.5);
+                let current_keys = ((pct / 100.0) * (ticker_total_round_keys as f64)) as u64;
+
+                let mut s = states_ticker.lock().unwrap();
+                if let Some(st) = s.get_mut(&p_num_ticker) {
+                    if st.round_phase == "computing" {
+                        st.round_progress_pct = pct;
+                        if current_keys > st.round_keys_checked {
+                            st.round_keys_checked = current_keys;
+                        }
+                        if let Ok(msg) = serde_json::to_string(&*st) {
+                            let _ = ws_tx_ticker.send(msg);
+                        }
+                    }
+                }
+            }
+        });
 
         // Jalankan seluruh worker secara paralel (Gunakan persistent CUDA daemon jika siap, atau fallback standard)
         let done_workers = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -817,14 +894,18 @@ async fn run_hunt_loop(
                     };
 
                     let finished = done_workers_clone.fetch_add(1, Ordering::SeqCst) + 1;
-                    let pct = ((finished as f64) / (total_w as f64)) * 100.0;
-                    let round_keys = (finished as u64) * win_keys_val;
+                    let worker_pct = 6.0 + ((finished as f64) / (total_w as f64)) * 86.5;
+                    let completed_keys = (finished as u64) * win_keys_val;
                     {
                         let mut s = states_cb.lock().unwrap();
                         if let Some(st) = s.get_mut(&p_num) {
                             st.round_workers_done = finished;
-                            st.round_progress_pct = pct;
-                            st.round_keys_checked = round_keys;
+                            if completed_keys > st.round_keys_checked {
+                                st.round_keys_checked = completed_keys;
+                            }
+                            if worker_pct > st.round_progress_pct {
+                                st.round_progress_pct = worker_pct;
+                            }
                             if let Ok(msg) = serde_json::to_string(&*st) {
                                 let _ = ws_tx_cb.send(msg);
                             }
@@ -917,14 +998,18 @@ async fn run_hunt_loop(
 
                     let ret = task_fut.await.unwrap_or_else(|_| (win_id, ws, we, crate::kangaroo::KangarooResult::miss(0, 0.0)));
                     let finished = done_workers_clone.fetch_add(1, Ordering::SeqCst) + 1;
-                    let pct = ((finished as f64) / (total_w as f64)) * 100.0;
-                    let round_keys = (finished as u64) * win_keys_val;
+                    let worker_pct = 6.0 + ((finished as f64) / (total_w as f64)) * 86.5;
+                    let completed_keys = (finished as u64) * win_keys_val;
                     {
                         let mut s = states_cb.lock().unwrap();
                         if let Some(st) = s.get_mut(&p_num) {
                             st.round_workers_done = finished;
-                            st.round_progress_pct = pct;
-                            st.round_keys_checked = round_keys;
+                            if completed_keys > st.round_keys_checked {
+                                st.round_keys_checked = completed_keys;
+                            }
+                            if worker_pct > st.round_progress_pct {
+                                st.round_progress_pct = worker_pct;
+                            }
                             if let Ok(msg) = serde_json::to_string(&*st) {
                                 let _ = ws_tx_cb.send(msg);
                             }
@@ -936,6 +1021,24 @@ async fn run_hunt_loop(
 
             futures_util::future::join_all(tasks).await
         };
+
+        // Hentikan background smooth ticker setelah komputasi selesai
+        ticker_cancel.store(true, Ordering::Relaxed);
+        let _ = ticker_handle.await;
+
+        // Fase 3: Worker selesai, CPU mengumpulkan hasil & BATCH INSERT ke PostgreSQL
+        {
+            let mut s = states.lock().unwrap();
+            if let Some(st) = s.get_mut(&puzzle_num) {
+                st.round_phase = "committing".to_string();
+                st.round_workers_done = num_workers;
+                st.round_progress_pct = 95.0;
+                st.round_keys_checked = total_round_keys;
+                if let Ok(msg) = serde_json::to_string(&*st) {
+                    let _ = ws_tx.send(msg);
+                }
+            }
+        }
 
         let mut hit_result = None;
         let mut batch_keys: u64 = 0;
@@ -976,11 +1079,13 @@ async fn run_hunt_loop(
         } else {
             0.0
         };
+        last_kps = kps;
 
-        // Update stats in-memory
+        // Fase 4: Batch ronde selesai 100%, commit ke DB tuntas, siap ronde berikutnya
         {
             let mut s = states.lock().unwrap();
             if let Some(st) = s.get_mut(&puzzle_num) {
+                st.round_phase = "completed".to_string();
                 st.total_keys_checked = total_keys;
                 st.keys_per_second = kps;
                 st.windows_scanned = scanned.len() as u64;
@@ -991,10 +1096,10 @@ async fn run_hunt_loop(
                 let win_keys = 1u64 << effective_window_bits;
                 st.window_bits = effective_window_bits;
                 st.window_keys = win_keys;
-                st.keys_per_round = (num_workers as u64) * win_keys;
+                st.keys_per_round = total_round_keys;
                 st.round_workers_done = num_workers;
                 st.round_progress_pct = 100.0;
-                st.round_keys_checked = (num_workers as u64) * win_keys;
+                st.round_keys_checked = total_round_keys;
                 st.is_kangaroo_mode = target_pub_bytes.is_some();
 
                 // Broadcast live progress ke WebSocket client
@@ -2051,6 +2156,9 @@ fn pick_random_window(
 fn update_status(states: &Arc<Mutex<HashMap<i32, HunterState>>>, puzzle_num: i32, status: HunterStatus) {
     if let Some(st) = states.lock().unwrap().get_mut(&puzzle_num) {
         st.status = status;
+        if st.status != HunterStatus::Running {
+            st.round_phase = "idle".to_string();
+        }
     }
 }
 

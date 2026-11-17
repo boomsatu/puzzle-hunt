@@ -501,7 +501,7 @@ impl CudaBitcrackDaemon {
         ]);
         cmd.stdin(std::process::Stdio::piped());
         cmd.stdout(std::process::Stdio::piped());
-        cmd.stderr(std::process::Stdio::null());
+        cmd.stderr(std::process::Stdio::inherit());
 
         let mut child = cmd.spawn().map_err(|e| format!("Spawn failed: {e}"))?;
         let stdin = child.stdin.take().ok_or_else(|| "Failed to get stdin".to_string())?;
@@ -543,9 +543,14 @@ impl CudaBitcrackDaemon {
         let s_clean = start_hex.trim_start_matches("0x");
         let e_clean = end_hex.trim_start_matches("0x");
         let cmd_line = format!("RANGE {s_clean} {e_clean}\n");
+
+        if let Ok(Some(status)) = self.child.try_wait() {
+            return Err(format!("Daemon worker {} already terminated with status: {}", self.worker_id, status));
+        }
+
         use tokio::io::AsyncWriteExt;
-        self.stdin.write_all(cmd_line.as_bytes()).await.map_err(|e| e.to_string())?;
-        self.stdin.flush().await.map_err(|e| e.to_string())?;
+        self.stdin.write_all(cmd_line.as_bytes()).await.map_err(|e| format!("Daemon worker {} write failed: {e}", self.worker_id))?;
+        self.stdin.flush().await.map_err(|e| format!("Daemon worker {} flush failed: {e}", self.worker_id))?;
 
         while !stop_flag.load(Ordering::Relaxed) {
             tokio::select! {

@@ -31,10 +31,10 @@ echo "📦 Mengunduh source code BitCrack..."
 git clone --depth 1 https://github.com/brichard19/BitCrack.git "$BUILD_DIR"
 cd "$BUILD_DIR"
 
-# Patch KeyFinder/main.cpp untuk mengaktifkan --daemon interactive mode (Zero Teardown / Real-time jumping)
+# Patch BitCrack source untuk mengaktifkan --daemon interactive mode (Zero Teardown / Real-time jumping)
 if [ -f "$SCRIPT_DIR/patch_cubitcrack.py" ]; then
-    echo "⚡ Menerapkan patch Interactive Daemon Mode ke KeyFinder/main.cpp..."
-    python3 "$SCRIPT_DIR/patch_cubitcrack.py" "$BUILD_DIR/KeyFinder/main.cpp" || python "$SCRIPT_DIR/patch_cubitcrack.py" "$BUILD_DIR/KeyFinder/main.cpp" || true
+    echo "⚡ Menerapkan patch Interactive Daemon Mode ke BitCrack source..."
+    python3 "$SCRIPT_DIR/patch_cubitcrack.py" "$BUILD_DIR" || python "$SCRIPT_DIR/patch_cubitcrack.py" "$BUILD_DIR" || true
 fi
 
 # 4. Modifikasi Makefile BitCrack agar menyertakan PTX (code=[sm_XX,compute_XX])

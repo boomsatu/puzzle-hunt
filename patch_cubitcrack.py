@@ -1,37 +1,82 @@
 import sys
 import os
 
-def patch_main_cpp(file_path):
-    with open(file_path, 'r', encoding='utf-8') as f:
+def patch_file(path, old, new, desc):
+    if not os.path.exists(path):
+        print(f"⚠️ File not found: {path}")
+        return False
+    with open(path, 'r', encoding='utf-8') as f:
         content = f.read()
 
-    # 1. Add #include <sstream>
-    if '#include <sstream>' not in content:
-        content = '#include <sstream>\n' + content
+    content_norm = content.replace('\r\n', '\n')
+    old_norm = old.replace('\r\n', '\n')
+    new_norm = new.replace('\r\n', '\n')
 
-    # 2. Add bool daemon = false; to RunConfig
-    if 'bool daemon = false;' not in content:
-        content = content.replace('bool follow = false;', 'bool follow = false;\n    bool daemon = false;')
+    if old_norm in content_norm:
+        content_norm = content_norm.replace(old_norm, new_norm)
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(content_norm)
+        print(f"✅ {desc}")
+        return True
+    elif new_norm in content_norm:
+        print(f"ℹ️ Already patched: {desc}")
+        return True
+    else:
+        print(f"⚠️ Target block not found for: {desc}")
+        return False
 
-    # 3. Add immediate FOUND output to resultCallback
-    if 'FOUND ' not in content:
-        old_cb = 'void resultCallback(KeySearchResult info)\n{'
-        new_cb = 'void resultCallback(KeySearchResult info)\n{\n\tstd::cout << "FOUND " << info.privateKey.toString(16) << " " << info.address << std::endl;\n\tstd::cout.flush();'
-        content = content.replace(old_cb, new_cb)
+def patch_bitcrack(base_dir):
+    # 1. Patch KeySearchDevice.h to add virtual destructor (prevent undefined behavior on delete d)
+    h_path = os.path.join(base_dir, "KeyFinderLib", "KeySearchDevice.h")
+    patch_file(
+        h_path,
+        "class KeySearchDevice {\n\npublic:",
+        "class KeySearchDevice {\n\npublic:\n    virtual ~KeySearchDevice() {}\n",
+        "KeySearchDevice.h virtual destructor"
+    )
 
-    # 4. Add --daemon to CmdParse
-    if '--daemon' not in content:
-        content = content.replace(
-            'parser.add("-u", "--uncompressed", false);',
-            'parser.add("-u", "--uncompressed", false);\n\tparser.add("", "--daemon", false);'
-        )
-        content = content.replace(
-            'if(optArg.equals("-t", "--threads")) {',
-            'if(optArg.equals("", "--daemon")) {\n\t\t\t\t_config.daemon = true;\n\t\t\t} else if(optArg.equals("-t", "--threads")) {'
-        )
+    # 2. Patch CudaKeySearchDevice.cpp to make cudaSetDeviceFlags safe on re-initialization
+    cpp_path = os.path.join(base_dir, "CudaKeySearchDevice", "CudaKeySearchDevice.cpp")
+    patch_file(
+        cpp_path,
+        "    // Block on kernel calls\n    cudaCall(cudaSetDeviceFlags(cudaDeviceScheduleBlockingSync));",
+        "    // Block on kernel calls (safe re-init for daemon mode)\n    cudaError_t flagErr = cudaSetDeviceFlags(cudaDeviceScheduleBlockingSync);\n    if(flagErr != cudaSuccess && flagErr != cudaErrorSetOnActiveProcess) {\n        cudaCall(flagErr);\n    }",
+        "CudaKeySearchDevice.cpp cudaSetDeviceFlags safe check"
+    )
 
-    # 5. Add interactive daemon loop to run()
-    old_run = """        // Get device context
+    # 3. Patch KeyFinder/main.cpp
+    main_path = os.path.join(base_dir, "KeyFinder", "main.cpp")
+    if os.path.exists(main_path):
+        with open(main_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        # #include <sstream>
+        if '#include <sstream>' not in content:
+            content = '#include <sstream>\n' + content
+
+        # RunConfig bool daemon = false;
+        if 'bool daemon = false;' not in content:
+            content = content.replace('bool follow = false;', 'bool follow = false;\n    bool daemon = false;')
+
+        # resultCallback FOUND output
+        if 'FOUND ' not in content:
+            old_cb = 'void resultCallback(KeySearchResult info)\n{'
+            new_cb = 'void resultCallback(KeySearchResult info)\n{\n\tstd::cout << "FOUND " << info.privateKey.toString(16) << " " << info.address << std::endl;\n\tstd::cout.flush();'
+            content = content.replace(old_cb, new_cb)
+
+        # CmdParse --daemon
+        if '--daemon' not in content:
+            content = content.replace(
+                'parser.add("-u", "--uncompressed", false);',
+                'parser.add("-u", "--uncompressed", false);\n\tparser.add("", "--daemon", false);'
+            )
+            content = content.replace(
+                'if(optArg.equals("-t", "--threads")) {',
+                'if(optArg.equals("", "--daemon")) {\n\t\t\t\t_config.daemon = true;\n\t\t\t} else if(optArg.equals("-t", "--threads")) {'
+            )
+
+        # Daemon execution loop in run()
+        old_run = """        // Get device context
         KeySearchDevice *d = getDeviceContext(_devices[_config.device], _config.blocks, _config.threads, _config.pointsPerThread);
 
         KeyFinder f(_config.nextKey, _config.endKey, _config.compression, d, _config.stride);
@@ -52,7 +97,7 @@ def patch_main_cpp(file_path):
 
         delete d;"""
 
-    new_run = """        // Get device context
+        new_run = """        // Get device context
         KeySearchDevice *d = getDeviceContext(_devices[_config.device], _config.blocks, _config.threads, _config.pointsPerThread);
 
         if (_config.daemon) {
@@ -95,6 +140,9 @@ def patch_main_cpp(file_path):
                         uint64_t count = (endKey - startKey).toUint64();
                         std::cout << "DONE " << count << " " << util::format("%.3f", elapsed) << std::endl;
                         std::cout.flush();
+                    } catch (const KeySearchException &e) {
+                        std::cout << "ERROR " << e.msg << std::endl;
+                        std::cout.flush();
                     } catch (const std::exception &e) {
                         std::cout << "ERROR " << e.what() << std::endl;
                         std::cout.flush();
@@ -127,30 +175,34 @@ def patch_main_cpp(file_path):
             delete d;
         }"""
 
-    # Normalize line endings before replacing
-    content_norm = content.replace('\r\n', '\n')
-    old_run_norm = old_run.replace('\r\n', '\n')
-    new_run_norm = new_run.replace('\r\n', '\n')
+        content_norm = content.replace('\r\n', '\n')
+        old_run_norm = old_run.replace('\r\n', '\n')
+        new_run_norm = new_run.replace('\r\n', '\n')
 
-    if old_run_norm in content_norm:
-        content_norm = content_norm.replace(old_run_norm, new_run_norm)
-        print("✅ Successfully patched KeyFinder/main.cpp with Interactive Daemon Mode!")
-    else:
-        print("⚠️ Warning: old_run block not matched exactly, trying fallback regex...")
-        import re
-        pattern = r"// Get device context[\s\S]*?delete d;"
-        if re.search(pattern, content_norm):
-            content_norm = re.sub(pattern, new_run_norm, content_norm, count=1)
-            print("✅ Successfully patched KeyFinder/main.cpp using fallback pattern!")
+        if old_run_norm in content_norm:
+            content_norm = content_norm.replace(old_run_norm, new_run_norm)
+            print("✅ KeyFinder/main.cpp patched with Interactive Daemon Mode!")
+        elif new_run_norm in content_norm:
+            print("ℹ️ KeyFinder/main.cpp already patched!")
         else:
-            print("❌ Failed to match device context block in KeyFinder/main.cpp")
-            sys.exit(1)
+            import re
+            pattern = r"// Get device context[\s\S]*?delete d;"
+            if re.search(pattern, content_norm):
+                content_norm = re.sub(pattern, new_run_norm, content_norm, count=1)
+                print("✅ KeyFinder/main.cpp patched using regex fallback!")
+            else:
+                print("❌ Failed to match device context block in KeyFinder/main.cpp")
+                sys.exit(1)
 
-    with open(file_path, 'w', encoding='utf-8') as f:
-        f.write(content_norm)
+        with open(main_path, 'w', encoding='utf-8') as f:
+            f.write(content_norm)
 
 if __name__ == '__main__':
-    if len(sys.argv) > 1:
-        patch_main_cpp(sys.argv[1])
+    target = sys.argv[1] if len(sys.argv) > 1 else "."
+    # If a file path was passed directly (e.g. .../KeyFinder/main.cpp), find the repo root
+    if os.path.isfile(target):
+        base = os.path.dirname(os.path.dirname(os.path.abspath(target)))
     else:
-        print("Usage: python patch_cubitcrack.py <path_to_KeyFinder/main.cpp>")
+        base = os.path.abspath(target)
+    print(f"⚡ Applying cuBitCrack Daemon patches in: {base}")
+    patch_bitcrack(base)

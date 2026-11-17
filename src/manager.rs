@@ -735,31 +735,48 @@ async fn run_hunt_loop(
 
         // Jalankan seluruh worker secara paralel (Gunakan persistent CUDA daemon jika siap, atau fallback standard)
         let batch_results = if !bitcrack_daemons.is_empty() && bitcrack_daemons.len() == batch_windows.len() {
-            let futs = bitcrack_daemons.iter_mut().zip(batch_windows.iter()).map(|(daemon, (win_id, ws, we))| {
+            let futs = bitcrack_daemons.iter_mut().zip(batch_windows.iter()).enumerate().map(|(w_idx, (daemon, (win_id, ws, we)))| {
                 let s_hex = format!("0x{:x}", ws);
                 let e_hex = format!("0x{:x}", we);
                 let stop_inner = stop_flag.clone();
                 let win_id_val = *win_id;
                 let ws_clone = ws.clone();
                 let we_clone = we.clone();
+                let p_addr = puzzle.address.clone();
+                let assigned_gpu = daemon.gpu_id;
                 async move {
-                    let res = daemon.search_range(&s_hex, &e_hex, stop_inner).await;
-                    (win_id_val, ws_clone, we_clone, res)
+                    let res = daemon.search_range(&s_hex, &e_hex, stop_inner.clone()).await;
+                    match res {
+                        Ok(r) => (win_id_val, ws_clone, we_clone, r),
+                        Err(e) => {
+                            tracing::warn!("⚠️ [CUDA DAEMON] Worker {w_idx} error: {e}. Fallback ke single-run window.");
+                            let fallback_res = if let Some(bin) = crate::kangaroo::cuda::find_cuda_address_solver() {
+                                let gpu_count = crate::kangaroo::cuda::get_gpu_count();
+                                let workers_per_gpu = (num_workers / gpu_count).max(1);
+                                let total_sm = crate::kangaroo::cuda::get_optimal_bitcrack_blocks(assigned_gpu);
+                                let sm_blocks = (total_sm / (workers_per_gpu as u32)).clamp(4, total_sm);
+                                let ws_fb = ws_clone.clone();
+                                let we_fb = we_clone.clone();
+                                tokio::task::spawn_blocking(move || {
+                                    crate::kangaroo::cuda::run_cuda_bitcrack_window(
+                                        &bin,
+                                        &p_addr,
+                                        &ws_fb,
+                                        &we_fb,
+                                        assigned_gpu,
+                                        sm_blocks,
+                                        stop_inner,
+                                    )
+                                }).await.unwrap_or_else(|_| crate::kangaroo::KangarooResult::miss(0, 0.0))
+                            } else {
+                                crate::kangaroo::KangarooResult::miss(0, 0.0)
+                            };
+                            (win_id_val, ws_clone, we_clone, fallback_res)
+                        }
+                    }
                 }
             });
-            let raw_results = futures_util::future::join_all(futs).await;
-            let mut converted = Vec::with_capacity(raw_results.len());
-            for (win_id_val, ws_clone, we_clone, res_result) in raw_results {
-                let res = match res_result {
-                    Ok(r) => r,
-                    Err(e) => {
-                        tracing::warn!("⚠️ [CUDA DAEMON] Error di daemon worker: {e}");
-                        crate::kangaroo::KangarooResult::miss(0, 0.0)
-                    }
-                };
-                converted.push((win_id_val, ws_clone, we_clone, res));
-            }
-            converted
+            futures_util::future::join_all(futs).await
         } else {
             let tasks = batch_windows.into_iter().enumerate().map(|(w_idx, (win_id, ws, we))| {
                 let stop_inner = stop_flag.clone();

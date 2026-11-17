@@ -101,43 +101,6 @@ def load_env() -> dict:
 
 
 # ==============================================================================
-# NOTIFIKASI TELEGRAM
-# ==============================================================================
-def send_telegram_alert(message: str):
-    env_vars = load_env()
-    token = env_vars.get("TELEGRAM_BOT_TOKEN")
-    chat_id = env_vars.get("TELEGRAM_CHAT_ID")
-    proxy_url = env_vars.get("TELEGRAM_API_URL")
-
-    if not token or not chat_id or "your_telegram" in token:
-        return
-
-    try:
-        import urllib.request
-        import json
-
-        base_url = proxy_url.rstrip("/") if proxy_url else "https://api.telegram.org"
-        endpoint = f"{base_url}/bot{token}/sendMessage"
-
-        payload = json.dumps({
-            "chat_id": chat_id,
-            "text": message,
-            "parse_mode": "HTML",
-            "disable_web_page_preview": True,
-        }).encode("utf-8")
-
-        req = urllib.request.Request(
-            endpoint,
-            data=payload,
-            headers={"Content-Type": "application/json"}
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            pass
-    except Exception as e:
-        log(f"⚠️ Gagal mengirim notifikasi Telegram: {e}")
-
-
-# ==============================================================================
 # DATABASE DUMP & GZIP
 # ==============================================================================
 def export_database() -> str:
@@ -335,26 +298,11 @@ def execute_backup_cycle(custom_bucket: str = None):
         file_size_mb = os.path.getsize(gz_path) / (1024 * 1024)
         fname = os.path.basename(gz_path)
 
-        success_msg = (
-            f"<b>✅ [AUTO BACKUP DB BERHASIL]</b>\n"
-            f"• <b>File:</b> <code>{fname}</code>\n"
-            f"• <b>Ukuran:</b> {file_size_mb:.2f} MB (GZIP)\n"
-            f"• <b>Storage:</b> Filebase S3\n"
-            f"• <b>Lokasi:</b> <code>{s3_uri}</code>\n"
-            f"• <b>Durasi:</b> {duration:.1f} detik\n"
-            f"• <b>Waktu:</b> {datetime.now(WIB).strftime('%Y-%m-%d %H:%M:%S WIB')}"
-        )
-        send_telegram_alert(success_msg)
-        log(f"🎉 SEMUA PROSES TUNTAS DALAM {duration:.1f} DETIK! Data aman di Filebase.")
+        log(f"🎉 SEMUA PROSES TUNTAS DALAM {duration:.1f} DETIK! File: {fname} ({file_size_mb:.2f} MB)")
+        log(f"📍 Tersimpan aman di: {s3_uri}")
         log("======================================================================")
         return True
     except Exception as e:
-        err_msg = (
-            f"<b>⚠️ [AUTO BACKUP DB GAGAL]</b>\n"
-            f"• <b>Error:</b> <code>{str(e)}</code>\n"
-            f"• <b>Waktu:</b> {datetime.now(WIB).strftime('%Y-%m-%d %H:%M:%S WIB')}"
-        )
-        send_telegram_alert(err_msg)
         log(f"❌ ERROR SAAT BACKUP: {e}")
         log("======================================================================")
         return False

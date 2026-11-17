@@ -78,12 +78,15 @@ def log(msg: str):
     now_str = datetime.now(WIB).strftime("%Y-%m-%d %H:%M:%S WIB")
     line = f"[{now_str}] {msg}"
     print(line, flush=True)
-    try:
-        os.makedirs(DATA_DIR, exist_ok=True)
-        with open(LOG_FILE, "a", encoding="utf-8") as f:
-            f.write(line + "\n")
-    except Exception:
-        pass
+    # Jika stdout adalah terminal interaktif (bukan daemon yang sudah di-redirect ke file),
+    # simpan juga ke file log agar riwayat tetap tercatat tanpa duplikasi.
+    if sys.stdout.isatty():
+        try:
+            os.makedirs(DATA_DIR, exist_ok=True)
+            with open(LOG_FILE, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+        except Exception:
+            pass
 
 
 def load_env() -> dict:

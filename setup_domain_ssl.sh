@@ -58,10 +58,17 @@ if [ "$CHOICE" == "1" ]; then
     if [[ "$HAS_TOKEN" =~ ^[Yy]$ ]]; then
         read -p "Paste Cloudflare Tunnel Token Anda: " CF_TOKEN
         if [ -n "$CF_TOKEN" ]; then
+            mkdir -p logs
             echo -e "Memasang cloudflared sebagai background service..."
-            cloudflared service install "$CF_TOKEN" || true
-            systemctl start cloudflared 2>/dev/null || nohup cloudflared tunnel run --token "$CF_TOKEN" > logs/cloudflared.log 2>&1 &
-            echo -e "${GREEN}✅ Cloudflare Tunnel aktif! Domain https://$DOMAIN sudah terhubung ke backend.${NC}"
+            cloudflared service install "$CF_TOKEN" 2>/dev/null || true
+            service cloudflared start 2>/dev/null || systemctl start cloudflared 2>/dev/null || nohup cloudflared tunnel run --token "$CF_TOKEN" > logs/cloudflared.log 2>&1 &
+            sleep 2
+            if pgrep -f cloudflared >/dev/null; then
+                echo -e "${GREEN}✅ Cloudflare Tunnel aktif & berjalan! Domain https://$DOMAIN sudah terhubung ke backend.${NC}"
+            else
+                nohup cloudflared tunnel run --token "$CF_TOKEN" > logs/cloudflared.log 2>&1 &
+                echo -e "${GREEN}✅ Cloudflare Tunnel aktif via daemon! Domain https://$DOMAIN sudah terhubung ke backend.${NC}"
+            fi
         fi
     else
         echo -e "\n${CYAN}Menjalankan Cloudflare Tunnel ke http://localhost:$BACKEND_PORT di background...${NC}"

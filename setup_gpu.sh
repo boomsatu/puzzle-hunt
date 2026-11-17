@@ -1,15 +1,11 @@
 #!/usr/bin/env bash
 # ==============================================================================
-#   BITCOIN PUZZLE HUNTER — ALL-IN-ONE GPU HOSTING SETUP
-#   Target: GPU Cloud Instances (Vast.ai, RunPod, Lambda Labs, AWS EC2, RTX 5090/4090/6000 Ada)
+#   BITCOIN PUZZLE HUNTER — GPU HOSTING AUTO SETUP (BACKEND ONLY)
+#   Target: GPU Cloud Instances (Vast.ai, RunPod, Lambda Labs, AWS EC2, RTX 6000 Ada/S, etc.)
 #   Fungsi:
-#     - [1/7] Deteksi hardware GPU NVIDIA & arsitektur CUDA
-#     - [2/7] Pasang dependensi sistem Linux (build tools, clang, docker, nvtop)
-#     - [3/7] Pasang Rust compiler terbaru (rustup stable)
-#     - [4/7] Setup konfigurasi .env otomatis (HUNT_MODE=gpu, stratified, accumulator)
-#     - [5/7] Setup PostgreSQL (Docker container / native) & migrasi schema awal
-#     - [6/7] Kompilasi cuBitCrack GPU Accelerator (Blackwell sm_120 / Ada sm_89)
-#     - [7/7] Kompilasi Rust Backend Engine (Release mode LTO)
+#     - Deploy backend Rust & PostgreSQL di GPU hosting
+#     - Import database lokal (puzzles & 240k+ scanned windows)
+#     - Frontend di-hosting terpisah di Vercel (bukan di GPU host)
 # ==============================================================================
 set -e
 
@@ -18,7 +14,7 @@ CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
 echo -e "${CYAN}${BOLD}"
 echo "╔══════════════════════════════════════════════════════════════════════╗"
-echo "║   🚀 BITCOIN PUZZLE HUNTER — ALL-IN-ONE GPU HOSTING SETUP           ║"
+echo "║   🚀 BITCOIN PUZZLE HUNTER — BACKEND GPU HOSTING SETUP             ║"
 echo "╚══════════════════════════════════════════════════════════════════════╝"
 echo -e "${NC}"
 
@@ -27,7 +23,7 @@ cd "$PROJECT_DIR"
 echo -e "📁 Direktori Proyek: ${GREEN}$PROJECT_DIR${NC}\n"
 
 # ── 1. Deteksi GPU NVIDIA ───────────────────────────────────────────────────
-echo -e "${CYAN}━━━ [1/7] Memeriksa Hardware GPU NVIDIA ━━━${NC}"
+echo -e "${CYAN}━━━ [1/6] Memeriksa Hardware GPU NVIDIA ━━━${NC}"
 if command -v nvidia-smi &>/dev/null; then
     GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)
     GPU_MEM=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader | head -1)
@@ -40,45 +36,26 @@ else
 fi
 
 # ── 2. Install Dependensi Sistem Linux ──────────────────────────────────────
-echo -e "\n${CYAN}━━━ [2/7] Memeriksa & Menginstall Dependensi Sistem ━━━${NC}"
+echo -e "\n${CYAN}━━━ [2/6] Memeriksa & Menginstall Dependensi Sistem ━━━${NC}"
 SUDO=""
 if command -v sudo &>/dev/null; then
     SUDO="sudo"
 fi
 
-# Mencegah dialog interaktif (seperti timezone / needrestart) yang membekukan terminal
 export DEBIAN_FRONTEND=noninteractive
-export NEEDRESTART_MODE=a
 
 if command -v apt-get &>/dev/null; then
-    echo "📦 [1/3] Memperbarui indeks paket (apt update)..."
-    $SUDO apt-get update -y
-    
-    echo "📦 [2/3] Memasang tool pembangunan & dependensi utama..."
-    $SUDO apt-get install -y --no-install-recommends \
-        -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" \
-        build-essential cmake pkg-config libssl-dev libgmp-dev \
-        git curl wget screen tmux htop psmisc python3 python3-pip postgresql-client
-
-    echo "📦 [3/3] Memasang dependensi pelengkap (clang & tool monitoring)..."
-    $SUDO apt-get install -y --no-install-recommends \
-        -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" \
-        libclang-dev clang nvtop 2>/dev/null || true
-
-    # Pasang postgresql lokal jika Docker tidak tersedia
-    if ! command -v docker &>/dev/null && ! command -v psql &>/dev/null; then
-        echo "📦 Memasang PostgreSQL native server..."
-        $SUDO apt-get install -y --no-install-recommends \
-            -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" \
-            postgresql postgresql-contrib 2>/dev/null || true
-    fi
+    $SUDO apt-get update -qq
+    $SUDO apt-get install -y -qq \
+        build-essential libgmp-dev libssl-dev pkg-config git curl wget screen \
+        postgresql postgresql-contrib
 elif command -v yum &>/dev/null; then
-    $SUDO yum install -y gcc gcc-c++ cmake gmp-devel openssl-devel pkgconfig git curl wget screen tmux htop python3
+    $SUDO yum install -y gcc gcc-c++ gmp-devel openssl-devel pkgconfig git curl wget screen
 fi
 echo -e "${GREEN}✅ Dependensi sistem siap.${NC}"
 
 # ── 3. Install Rust Toolchain ───────────────────────────────────────────────
-echo -e "\n${CYAN}━━━ [3/7] Memeriksa Rust Compiler ━━━${NC}"
+echo -e "\n${CYAN}━━━ [3/6] Memeriksa Rust Compiler ━━━${NC}"
 if ! command -v cargo &>/dev/null; then
     echo "🦀 Mengunduh dan memasang Rust toolchain (stable)..."
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
@@ -87,12 +64,12 @@ if ! command -v cargo &>/dev/null; then
 else
     echo -e "${GREEN}✅ Rust sudah terpasang: $(rustc --version)${NC}"
 fi
-[ -f "$HOME/.cargo/env" ] && source "$HOME/.cargo/env" 2>/dev/null || true
+source "$HOME/.cargo/env" 2>/dev/null || true
 [ -f "/root/.cargo/env" ] && source "/root/.cargo/env" 2>/dev/null || true
 export PATH="$HOME/.cargo/bin:/root/.cargo/bin:$PATH"
 
 # ── 4. Konfigurasi Environment (.env) ───────────────────────────────────────
-echo -e "\n${CYAN}━━━ [4/7] Konfigurasi Environment (.env) ━━━${NC}"
+echo -e "\n${CYAN}━━━ [4/6] Konfigurasi Environment (.env) ━━━${NC}"
 if [ ! -f ".env" ]; then
     cp .env.example .env
     echo "📋 Berkas .env dibuat dari .env.example"
@@ -111,17 +88,9 @@ fi
 echo -e "${GREEN}✅ .env berhasil dikonfigurasi untuk GPU hosting (HUNT_MODE=gpu).${NC}"
 
 # ── 5. Setup Database PostgreSQL & Migrasi Data ─────────────────────────────
-echo -e "\n${CYAN}━━━ [5/7] Setup PostgreSQL & Migrasi Data ━━━${NC}"
+echo -e "\n${CYAN}━━━ [5/6] Setup PostgreSQL & Migrasi Data ━━━${NC}"
 if command -v docker &>/dev/null && docker ps &>/dev/null; then
-    docker compose up -d postgres 2>/dev/null || docker run -d --name puzzle_postgres \
-        --restart always \
-        -e POSTGRES_USER=postgres \
-        -e POSTGRES_PASSWORD=postgrespassword \
-        -e POSTGRES_DB=puzzle_hunt \
-        -p 5432:5432 \
-        -v puzzle_postgres_data:/var/lib/postgresql/data \
-        postgres:16-alpine 2>/dev/null || true
-
+    docker compose up -d postgres
     echo "⏳ Menunggu container PostgreSQL siap..."
     sleep 4
 
@@ -134,10 +103,14 @@ if command -v docker &>/dev/null && docker ps &>/dev/null; then
 
     # Cek apakah ada file backup lokal yang dibawa user
     if [ -f "data/puzzle_hunt_backup.sql" ]; then
-        echo -e "${YELLOW}📦 Ditemukan file backup lokal (data/puzzle_hunt_backup.sql)! Mengimpor data...${NC}"
-        bash import_db.sh "data/puzzle_hunt_backup.sql" 2>/dev/null || true
-    elif [ -f "data/seed_unsolved.sql" ]; then
-        docker exec -i puzzle_postgres psql -U postgres -d puzzle_hunt < "data/seed_unsolved.sql" > /dev/null 2>&1 || true
+        echo -e "${YELLOW}📦 Ditemukan file backup lokal (data/puzzle_hunt_backup.sql)!${NC}"
+        echo -e "${YELLOW}   Mengimpor seluruh data puzzles dan scanned windows...${NC}"
+        bash import_db.sh "data/puzzle_hunt_backup.sql"
+    else
+        echo -e "${YELLOW}ℹ️  Tidak ada data/puzzle_hunt_backup.sql. Menjalankan skema dasar dan seed awal...${NC}"
+        if [ -f "data/seed_unsolved.sql" ]; then
+            docker exec -i puzzle_postgres psql -U postgres -d puzzle_hunt < "data/seed_unsolved.sql" > /dev/null 2>&1 || true
+        fi
         echo -e "${GREEN}✅ PostgreSQL (Docker) siap dengan dataset default.${NC}"
     fi
 else
@@ -151,21 +124,8 @@ else
     echo -e "${GREEN}✅ PostgreSQL (Native) siap & running di port 5432.${NC}"
 fi
 
-# ── 6. Kompilasi cuBitCrack GPU Accelerator ─────────────────────────────────
-echo -e "\n${CYAN}━━━ [6/7] Memeriksa & Mengompilasi cuBitCrack GPU Solver ━━━${NC}"
-if [ -f "build_cubitcrack.sh" ] && command -v nvcc &>/dev/null; then
-    if [ ! -f "bin/cuBitCrack" ]; then
-        echo "⚡ Mengompilasi cuBitCrack untuk arsitektur GPU server..."
-        bash build_cubitcrack.sh || echo -e "${YELLOW}⚠️ Kompilasi cuBitCrack dilewati / gagal, solver native tetap aktif.${NC}"
-    else
-        echo -e "${GREEN}✅ Binary cuBitCrack sudah tersedia di bin/cuBitCrack.${NC}"
-    fi
-else
-    echo -e "${YELLOW}ℹ️ CUDA compiler (nvcc) belum aktif atau build_cubitcrack.sh tidak ditemukan. Menggunakan engine solver bawaan.${NC}"
-fi
-
-# ── 7. Kompilasi Release Rust Backend ───────────────────────────────────────
-echo -e "\n${CYAN}━━━ [7/7] Kompilasi Rust Backend (Release Binary) ━━━${NC}"
+# ── 6. Kompilasi Release Rust Backend ───────────────────────────────────────
+echo -e "\n${CYAN}━━━ [6/6] Kompilasi Rust Backend (Release Binary) ━━━${NC}"
 echo "🦀 Mengompilasi puzzle-hunt release mode..."
 cargo build --release --bin puzzle-hunt
 echo -e "${GREEN}✅ Binary backend berhasil dibuat: target/release/puzzle-hunt${NC}"
@@ -184,14 +144,12 @@ echo -e "${NC}"
 echo -e "📡 Backend API Endpoint : ${GREEN}http://$PUBLIC_IP:$PORT${NC}"
 echo -e "🔌 WebSocket Endpoint   : ${GREEN}ws://$PUBLIC_IP:$PORT/api/ws${NC}"
 echo ""
-echo -e "${BOLD}📌 Langkah Menjalankan Sistem:${NC}"
-echo "   1. Jalankan Cloudflare Tunnel (Token):"
-echo "      nohup cloudflared tunnel run --token <TOKEN_ANDA> > logs/cloudflared.log 2>&1 &"
-echo "   2. Jalankan Auto-Backup Filebase Daemon (pukul 22.00 WIB):"
-echo "      python3 auto_backup_filebase.py --start"
-echo "   3. Jalankan Hunter Engine (Daemon Background):"
-echo "      bash start_gpu.sh"
-echo "   4. Pantau Log & Suhu:"
-echo "      tail -f logs/backend.log     # Pantau log perburuan"
-echo "      nvtop                        # Pantau utilisasi GPU"
+echo -e "${BOLD}📌 Langkah Menjalankan Backend:${NC}"
+echo "   bash start_gpu.sh"
+echo "   (atau jalankan di background dengan: screen -S puzzle-backend bash start_gpu.sh)"
+echo ""
+echo -e "${BOLD}🌐 Menghubungkan Frontend di Vercel:${NC}"
+echo "   1. Deploy folder 'frontend' ke Vercel"
+echo "   2. Di pengaturan Environment Variables Vercel, tambahkan:"
+echo -e "      ${YELLOW}VITE_API_URL=http://$PUBLIC_IP:$PORT${NC}"
 echo ""

@@ -775,23 +775,76 @@ async fn run_hunt_loop(
         }
     }
 
-    // Background DB committer channel (buffer 64 batch)
-    let (db_tx, mut db_rx) = tokio::sync::mpsc::channel::<Vec<db::NewScannedWindow>>(64);
+    // In-memory Write-Behind Accumulator Buffer (Zero-Overhead Redis Alternative)
+    // Mengumpulkan hasil window di RAM hingga 500 rows atau maksimal flush setiap 15 detik
+    let batch_threshold = std::env::var("DB_BATCH_ACCUMULATOR_SIZE")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .unwrap_or(500);
+
+    let flush_secs = std::env::var("DB_BATCH_FLUSH_INTERVAL_SECS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(15);
+
+    let (db_tx, mut db_rx) = tokio::sync::mpsc::channel::<Vec<db::NewScannedWindow>>(128);
     let db_pool = pool.clone();
     let db_p_num = puzzle_num;
     let db_writer_handle = tokio::spawn(async move {
         let mut total_saved = 0usize;
-        while let Some(records) = db_rx.recv().await {
-            if !records.is_empty() {
-                let count = records.len();
-                if let Err(e) = db::record_scanned_windows_batch(&db_pool, &records).await {
-                    tracing::warn!("⚠️ [ASYNC DB COMMIT] Gagal menyimpan batch {count} windows puzzle #{db_p_num} ke PostgreSQL: {e}");
-                } else {
-                    total_saved += count;
+        let mut buffer: Vec<db::NewScannedWindow> = Vec::with_capacity(batch_threshold);
+        let mut flush_timer = tokio::time::interval(tokio::time::Duration::from_secs(flush_secs));
+        flush_timer.tick().await; // lewati tick pertama
+
+        loop {
+            tokio::select! {
+                maybe_records = db_rx.recv() => {
+                    match maybe_records {
+                        Some(records) => {
+                            buffer.extend(records);
+                            if buffer.len() >= batch_threshold {
+                                let to_save = std::mem::replace(&mut buffer, Vec::with_capacity(batch_threshold));
+                                let count = to_save.len();
+                                if let Err(e) = db::record_scanned_windows_batch(&db_pool, &to_save).await {
+                                    tracing::warn!("⚠️ [ASYNC DB ACCUMULATOR] Gagal menyimpan bulk {count} windows puzzle #{db_p_num} ke PostgreSQL: {e}");
+                                } else {
+                                    total_saved += count;
+                                    tracing::info!("💾 [ASYNC DB BULK COMMIT] Sukses menyimpan {count} windows puzzle #{db_p_num} ke PostgreSQL (Total: {total_saved}).");
+                                }
+                            }
+                        }
+                        None => {
+                            break;
+                        }
+                    }
+                }
+                _ = flush_timer.tick() => {
+                    if !buffer.is_empty() {
+                        let to_save = std::mem::replace(&mut buffer, Vec::with_capacity(batch_threshold));
+                        let count = to_save.len();
+                        if let Err(e) = db::record_scanned_windows_batch(&db_pool, &to_save).await {
+                            tracing::warn!("⚠️ [ASYNC DB TIMER FLUSH] Gagal menyimpan bulk {count} windows puzzle #{db_p_num} ke PostgreSQL: {e}");
+                        } else {
+                            total_saved += count;
+                            tracing::info!("⏱️ [ASYNC DB TIMER FLUSH] Auto-flush berkala ({flush_secs}s): {count} windows puzzle #{db_p_num} tersimpan ke PostgreSQL (Total: {total_saved}).");
+                        }
+                    }
                 }
             }
         }
-        tracing::info!("✅ [ASYNC DB COMMIT DRAINED] Seluruh {total_saved} window puzzle #{db_p_num} tuntas disimpan di PostgreSQL.");
+
+        // Final Drain: Simpan sisa window yang masih ada di RAM sebelum worker berhenti
+        if !buffer.is_empty() {
+            let count = buffer.len();
+            if let Err(e) = db::record_scanned_windows_batch(&db_pool, &buffer).await {
+                tracing::warn!("⚠️ [ASYNC DB FINAL FLUSH] Gagal menyimpan sisa {count} windows puzzle #{db_p_num}: {e}");
+            } else {
+                total_saved += count;
+                tracing::info!("🏁 [ASYNC DB FINAL FLUSH] Sisa {count} windows puzzle #{db_p_num} tuntas disimpan di PostgreSQL.");
+            }
+        }
+
+        tracing::info!("✅ [ASYNC DB ACCUMULATOR DRAINED] Seluruh {total_saved} window puzzle #{db_p_num} tersimpan permanen di PostgreSQL.");
     });
 
     // Background On-chain Watchdog (Non-blocking: berjalan di task independen tanpa menjeda GPU)

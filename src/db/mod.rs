@@ -273,6 +273,7 @@ pub async fn record_scanned_window(
 
 /// Menyimpan seluruh window yang telah discan dalam satu ronde secara BATCH INSERT.
 /// Mengurangi beban koneksi dan round-trip network/disk I/O pada PostgreSQL secara signifikan.
+/// Mendukung chunking otomatis per 1.000 records untuk keamanan batas parameter PostgreSQL.
 pub async fn record_scanned_windows_batch(
     pool: &PgPool,
     records: &[NewScannedWindow],
@@ -281,20 +282,23 @@ pub async fn record_scanned_windows_batch(
         return Ok(());
     }
 
-    let mut query_builder: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(
-        "INSERT INTO scanned_windows (puzzle_number, window_id, range_start_hex, range_end_hex, keys_checked, duration_secs) "
-    );
+    for chunk in records.chunks(1000) {
+        let mut query_builder: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(
+            "INSERT INTO scanned_windows (puzzle_number, window_id, range_start_hex, range_end_hex, keys_checked, duration_secs) "
+        );
 
-    query_builder.push_values(records, |mut b, rec| {
-        b.push_bind(rec.puzzle_number)
-            .push_bind(rec.window_id)
-            .push_bind(&rec.range_start_hex)
-            .push_bind(&rec.range_end_hex)
-            .push_bind(rec.keys_checked)
-            .push_bind(rec.duration_secs);
-    });
+        query_builder.push_values(chunk, |mut b, rec| {
+            b.push_bind(rec.puzzle_number)
+                .push_bind(rec.window_id)
+                .push_bind(&rec.range_start_hex)
+                .push_bind(&rec.range_end_hex)
+                .push_bind(rec.keys_checked)
+                .push_bind(rec.duration_secs);
+        });
 
-    query_builder.build().execute(pool).await?;
+        query_builder.build().execute(pool).await?;
+    }
+
     Ok(())
 }
 

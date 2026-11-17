@@ -16,6 +16,17 @@ echo -e "${CYAN}================================================================
 
 BACKUP_FILE="${1:-data/puzzle_hunt_backup.sql}"
 
+# Jika input berupa URL (http / https), unduh otomatis ke folder data/
+if [[ "$BACKUP_FILE" =~ ^https?:// ]]; then
+    echo -e "${YELLOW}🌐 Mendeteksi tautan download Filebase/Cloud: ${BACKUP_FILE}${NC}"
+    mkdir -p data
+    DOWNLOAD_PATH="data/puzzle_hunt_backup.sql.gz"
+    echo -e "⏳ Mengunduh file backup dari cloud..."
+    curl -L --progress-bar -o "$DOWNLOAD_PATH" "$BACKUP_FILE"
+    BACKUP_FILE="$DOWNLOAD_PATH"
+    echo -e "${GREEN}✅ File berhasil diunduh ke: $BACKUP_FILE${NC}"
+fi
+
 # Cek apakah ada file .sql atau .sql.gz
 if [ ! -f "$BACKUP_FILE" ]; then
     if [ -f "data/puzzle_hunt_backup.sql.gz" ]; then
@@ -66,10 +77,13 @@ fi
 # 2. Import database (mendukung .sql biasa maupun .sql.gz)
 echo -e "${YELLOW}[*] Mengimpor data ke PostgreSQL (mungkin butuh beberapa detik)...${NC}"
 
-IMPORT_CMD="psql -U postgres -d puzzle_hunt"
+IS_GZIP=false
+if [[ "$BACKUP_FILE" == *.gz ]] || (command -v file &>/dev/null && file "$BACKUP_FILE" | grep -qi "gzip") || (gzip -t "$BACKUP_FILE" 2>/dev/null); then
+    IS_GZIP=true
+fi
 
 if [ "$IS_DOCKER" = true ]; then
-    if [[ "$BACKUP_FILE" == *.gz ]]; then
+    if [ "$IS_GZIP" = true ]; then
         gunzip -c "$BACKUP_FILE" | docker exec -i puzzle_postgres psql -U postgres -d puzzle_hunt > /dev/null 2>&1 || \
         gunzip -c "$BACKUP_FILE" | docker exec -i puzzle_postgres psql -U postgres -d puzzle_hunt
     else
@@ -78,12 +92,14 @@ if [ "$IS_DOCKER" = true ]; then
     fi
 else
     export PGPASSWORD=postgrespassword
-    if [[ "$BACKUP_FILE" == *.gz ]]; then
+    if [ "$IS_GZIP" = true ]; then
         gunzip -c "$BACKUP_FILE" | psql -h localhost -U postgres -d puzzle_hunt > /dev/null 2>&1 || \
-        gunzip -c "$BACKUP_FILE" | sudo -u postgres psql -d puzzle_hunt
+        gunzip -c "$BACKUP_FILE" | sudo -u postgres psql -d puzzle_hunt 2>/dev/null || \
+        gunzip -c "$BACKUP_FILE" | su - postgres -c "psql -d puzzle_hunt"
     else
         psql -h localhost -U postgres -d puzzle_hunt < "$BACKUP_FILE" > /dev/null 2>&1 || \
-        sudo -u postgres psql -d puzzle_hunt < "$BACKUP_FILE"
+        sudo -u postgres psql -d puzzle_hunt < "$BACKUP_FILE" 2>/dev/null || \
+        su - postgres -c "psql -d puzzle_hunt" < "$BACKUP_FILE"
     fi
 fi
 

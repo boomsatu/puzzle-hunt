@@ -77,11 +77,11 @@ service cloudflared start || nohup cloudflared tunnel run --token eyJhIjoiNTBhN2
 
 ---
 
-### 6. Aktifkan Auto-Backup Filebase S3 Daemon (22.00 WIB + Heartbeat Telegram Tiap 30 Menit)
-Menjalankan daemon otomatis di background untuk mengekspor database secara rutin ke Filebase Cloud Storage, sekaligus mengirimkan notifikasi detak jantung (*Heartbeat*) ke Telegram setiap 30 menit.
+### 6. Aktifkan Auto-Backup Filebase S3 Daemon (Setiap 3 Jam + Heartbeat Telegram Tiap 30 Menit)
+Menjalankan daemon otomatis di background untuk mengekspor database secara rutin ke Filebase Cloud Storage setiap 3 jam sekali (00, 03, 06, 09, 12, 15, 18, 21 WIB), sekaligus mengirimkan notifikasi detak jantung (*Heartbeat*) ke Telegram setiap 30 menit.
 
 ```bash
-# Jalankan daemon background (Backup harian 22.00 WIB + Heartbeat Telegram 30 Menit)
+# Jalankan daemon background (Backup otomatis tiap 3 Jam + Heartbeat Telegram 30 Menit)
 python3 auto_backup_filebase.py --start
 
 # (Opsional) Uji coba kirim Heartbeat ke Telegram sekarang juga:
@@ -89,7 +89,7 @@ python3 auto_backup_filebase.py --heartbeat
 ```
 > **Keterangan:**
 > - Berjalan sebagai background daemon mandiri (Unix double-forking — aman tutup terminal SSH).
-> - Otomatis mengekspor database dan mengompresi menjadi `.sql.gz` setiap pukul 22.00 WIB (UTC+7).
+> - Otomatis mengekspor database dan mengompresi menjadi `.sql.gz` setiap **3 jam sekali** (00:00, 03:00, 06:00, 09:00, 12:00, 15:00, 18:00, 21:00 WIB).
 > - **Heartbeat Telegram:** Mengirim status runtime hunter, kesehatan PostgreSQL, dan utilisasi GPU setiap 30 menit via Cloudflare Worker Proxy yang ada di `.env`.
 > - Untuk memeriksa status daemon: `python3 auto_backup_filebase.py --status`.
 

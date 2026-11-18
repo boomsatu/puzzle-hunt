@@ -4,7 +4,7 @@
    BITCOIN PUZZLE HUNTER — AUTO DATABASE BACKUP & FILEBASE S3 UPLOADER
 ==============================================================================
 Program terpisah untuk:
-1. Mengekspor database PostgreSQL secara otomatis setiap pukul 22.00 WIB (UTC+7)
+1. Mengekspor database PostgreSQL secara otomatis setiap 3 JAM (UTC+7)
    dan mengunggahnya ke cloud storage Filebase (S3).
 2. Mengirimkan notifikasi detak jantung (HEARTBEAT) setiap 30 menit ke Telegram
    lengkap dengan status hunter engine, database, dan utilisasi GPU.
@@ -50,8 +50,7 @@ FILEBASE_BUCKET_DEFAULT = os.environ.get("FILEBASE_BUCKET", "puzzle-hunt-backup"
 
 # Zona Waktu Indonesia Barat (WIB = UTC+7)
 WIB = timezone(timedelta(hours=7))
-TARGET_HOUR_WIB = 22  # Jam 22.00 WIB
-TARGET_MINUTE_WIB = 0
+BACKUP_INTERVAL_HOURS = 3  # Backup otomatis setiap 3 jam (00, 03, 06, 09, 12, 15, 18, 21 WIB)
 HEARTBEAT_INTERVAL_SECS = 30 * 60  # 30 menit (1800 detik)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -198,7 +197,7 @@ def send_heartbeat_notification():
     db_status = get_db_status()
     gpu_status = get_gpu_status()
 
-    _, next_run = get_seconds_until_next_22_wib()
+    _, next_run = get_next_backup_schedule()
     next_str = next_run.strftime("%Y-%m-%d %H:%M WIB")
 
     msg = (
@@ -209,7 +208,7 @@ def send_heartbeat_notification():
         f"⚡ <b>Engine Hunter:</b> {hunter_status}\n"
         f"🐘 <b>Database:</b> {db_status}\n"
         f"🎮 <b>GPU Status:</b> <code>{gpu_status}</code>\n"
-        f"💾 <b>Next Auto-Backup:</b> <code>{next_str}</code>\n"
+        f"💾 <b>Next Auto-Backup:</b> <code>{next_str}</code> (Setiap 3 Jam)\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         "<i>✅ Daemon & sistem perburuan berjalan normal.</i>"
     )
@@ -349,13 +348,13 @@ def export_database() -> str:
     except Exception:
         pass
 
-    # Bersihkan file backup lokal lama (simpan 7 hari terakhir)
-    cleanup_local_backups(keep_count=7)
+    # Bersihkan file backup lokal lama (simpan 24 file terakhir = 3 hari)
+    cleanup_local_backups(keep_count=24)
 
     return gz_file
 
 
-def cleanup_local_backups(keep_count: int = 7):
+def cleanup_local_backups(keep_count: int = 24):
     try:
         files = [
             os.path.join(BACKUP_DIR, f)
@@ -471,20 +470,23 @@ def execute_backup_cycle(custom_bucket: str = None) -> bool:
 
 
 # ==============================================================================
-# LOGIKA DAEMON SCHEDULE (JAM 22:00 WIB + HEARTBEAT SETIAP 30 MENIT)
+# LOGIKA DAEMON SCHEDULE (SETIAP 3 JAM + HEARTBEAT SETIAP 30 MENIT)
 # ==============================================================================
-def get_seconds_until_next_22_wib():
+def get_next_backup_schedule():
     now = datetime.now(WIB)
-    target = now.replace(hour=TARGET_HOUR_WIB, minute=TARGET_MINUTE_WIB, second=0, microsecond=0)
-    if now >= target:
-        target += timedelta(days=1)
+    current_slot = now.hour // BACKUP_INTERVAL_HOURS
+    next_hour = (current_slot + 1) * BACKUP_INTERVAL_HOURS
+    if next_hour >= 24:
+        target = (now + timedelta(days=1)).replace(hour=next_hour - 24, minute=0, second=0, microsecond=0)
+    else:
+        target = now.replace(hour=next_hour, minute=0, second=0, microsecond=0)
     sleep_sec = (target - now).total_seconds()
     return sleep_sec, target
 
 
 def run_scheduler_loop(custom_bucket: str = None):
     log("======================================================================")
-    log(f"🕒 DAEMON AKTIF — JADWAL BACKUP SETIAP HARI PUKUL {TARGET_HOUR_WIB:02d}:{TARGET_MINUTE_WIB:02d} WIB")
+    log(f"🕒 DAEMON AKTIF — JADWAL BACKUP OTOMATIS SETIAP {BACKUP_INTERVAL_HOURS} JAM (00, 03, 06, 09, 12, 15, 18, 21 WIB)")
     log(f"💓 HEARTBEAT TELEGRAM AKTIF — SETIAP 30 MENIT")
     log("======================================================================")
 
@@ -505,7 +507,7 @@ def run_scheduler_loop(custom_bucket: str = None):
     log("💓 Mengirim notifikasi Heartbeat awal ke Telegram...")
     send_heartbeat_notification()
     last_heartbeat_time = time.time()
-    last_backup_day = None
+    last_backup_slot = None
 
     while True:
         # Tidur sebentar (10 detik) per iterasi, hemat CPU 0.0%
@@ -518,12 +520,12 @@ def run_scheduler_loop(custom_bucket: str = None):
             send_heartbeat_notification()
             last_heartbeat_time = current_time
 
-        # 2. Cek apakah sudah mencapai jam 22:00 WIB dan belum backup hari ini
-        today_str = now.strftime("%Y-%m-%d")
-        if now.hour == TARGET_HOUR_WIB and now.minute == TARGET_MINUTE_WIB and last_backup_day != today_str:
-            log("🔔 Waktu telah mencapai 22:00 WIB! Mengeksekusi backup...")
+        # 2. Cek apakah sudah waktunya backup (setiap kelipatan 3 jam pada menit ke-0: 00:00, 03:00, 06:00, dst)
+        current_slot = f"{now.strftime('%Y-%m-%d')}_{now.hour:02d}"
+        if now.hour % BACKUP_INTERVAL_HOURS == 0 and now.minute == 0 and last_backup_slot != current_slot:
+            log(f"🔔 Waktu telah mencapai {now.strftime('%H:%M')} WIB! Mengeksekusi backup otomatis (interval 3 jam)...")
             execute_backup_cycle(custom_bucket)
-            last_backup_day = today_str
+            last_backup_slot = current_slot
 
 
 # ==============================================================================
@@ -579,7 +581,7 @@ def start_daemon(custom_bucket: str = None):
                     f.write(str(pid))
                 print(f"✅ [DAEMON AKTIF] Background backup daemon berjalan di PID {pid}")
                 print(f"📁 Log output tersimpan di: {LOG_FILE}")
-                print(f"🕒 Jadwal: Setiap hari pukul {TARGET_HOUR_WIB:02d}:{TARGET_MINUTE_WIB:02d} WIB (UTC+7)")
+                print(f"🕒 Jadwal: Setiap {BACKUP_INTERVAL_HOURS} jam (00, 03, 06, 09, 12, 15, 18, 21 WIB)")
                 print(f"💓 Heartbeat Telegram: Setiap 30 menit")
                 print(f"🔒 Terminal SSH sekarang AMAN DITUTUP tanpa menghentikan daemon.")
                 sys.exit(0)
@@ -639,14 +641,15 @@ def stop_daemon():
 
 def status_daemon():
     pid = get_running_daemon_pid()
-    _, next_run = get_seconds_until_next_22_wib()
+    _, next_run = get_next_backup_schedule()
     target_str = next_run.strftime("%Y-%m-%d %H:%M:%S WIB")
 
     if pid:
         print("======================================================================")
         print(f"🟢 STATUS: DAEMON SEDANG BERJALAN")
         print(f"• PID                : {pid}")
-        print(f"• Jadwal Backup      : {target_str}")
+        print(f"• Jadwal Backup      : Setiap {BACKUP_INTERVAL_HOURS} Jam (00, 03, 06, 09, 12, 15, 18, 21 WIB)")
+        print(f"• Backup Berikutnya  : {target_str}")
         print(f"• Heartbeat Telegram : Setiap 30 Menit")
         print(f"• Log File           : {LOG_FILE}")
         print("======================================================================")
@@ -705,7 +708,7 @@ def main():
         print("\nPerintah Cepat:")
         print("  python3 auto_backup_filebase.py --heartbeat  # Tes kirim notifikasi Heartbeat ke Telegram")
         print("  python3 auto_backup_filebase.py --now        # Backup & upload sekarang juga")
-        print("  python3 auto_backup_filebase.py --start      # Nyalakan auto backup 22.00 WIB + Heartbeat 30 Menit (Daemon)")
+        print("  python3 auto_backup_filebase.py --start      # Nyalakan auto backup tiap 3 Jam + Heartbeat 30 Menit (Daemon)")
         print("  python3 auto_backup_filebase.py --stop       # Hentikan daemon")
 
 

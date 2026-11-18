@@ -505,6 +505,17 @@ Simpan tabel perintah cepat ini untuk kemudahan pemeliharaan server:
 
 ---
 
+## ☕ Donasi & Dukungan Pengembangan
+
+Jika Anda merasa proyek ini bermanfaat untuk riset kriptografi, eksperimen GPU computing, atau perburuan Bitcoin Puzzle Challenge, Anda dapat memberikan apresiasi dan donasi ke alamat Bitcoin resmi pengembang:
+
+- **Bitcoin (BTC Native SegWit)**:  
+  `bc1qz08nklntedluzzr9w0g3qhxrkvytayentqdshc`
+
+Setiap donasi sangat membantu biaya operasional sewa instance server cloud GPU (Dual RTX 5090 / RTX 4090) dan pengembangan fitur-fitur baru!
+
+---
+
 ## 📄 Lisensi
 
 Proyek ini dilisensikan di bawah lisensi **MIT License**. Lihat berkas [LICENSE](LICENSE) untuk informasi lebih lanjut.

@@ -422,17 +422,15 @@ export const App: React.FC = () => {
                   Online
                 </span>
                 <span
-                  className={`flex items-center gap-1.5 text-[10px] sm:text-[11px] px-2 py-0.5 rounded-full font-medium border transition ${
-                    wsConnected
+                  className={`flex items-center gap-1.5 text-[10px] sm:text-[11px] px-2 py-0.5 rounded-full font-medium border transition ${wsConnected
                       ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
                       : 'bg-amber-500/10 text-amber-400 border-amber-500/20'
-                  }`}
+                    }`}
                   title={wsConnected ? 'WebSocket Live Stream Aktif' : 'Menghubungkan ke WebSocket...'}
                 >
                   <span
-                    className={`w-1.5 h-1.5 rounded-full ${
-                      wsConnected ? 'bg-emerald-400 animate-ping' : 'bg-amber-400'
-                    }`}
+                    className={`w-1.5 h-1.5 rounded-full ${wsConnected ? 'bg-emerald-400 animate-ping' : 'bg-amber-400'
+                      }`}
                   ></span>
                   <span>{wsConnected ? 'WSS Live' : 'WSS Reconnecting'}</span>
                 </span>
@@ -440,13 +438,12 @@ export const App: React.FC = () => {
                 {/* Real-time CPU Load Badge di Navbar (tampil di layar besar xl+) */}
                 {systemMetrics && (
                   <span
-                    className={`hidden xl:flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full font-medium border transition ${
-                      systemMetrics.cpu_usage_pct >= 85
+                    className={`hidden xl:flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full font-medium border transition ${systemMetrics.cpu_usage_pct >= 85
                         ? 'bg-rose-500/10 text-rose-400 border-rose-500/20'
                         : systemMetrics.cpu_usage_pct >= 50
-                        ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
-                        : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-                    }`}
+                          ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                          : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                      }`}
                     title={`Host CPU: ${systemMetrics.cpu_brand} (${systemMetrics.cpu_cores} Cores @ ${systemMetrics.cpu_freq_mhz} MHz)\nRAM: ${(systemMetrics.memory_used_mb / 1024).toFixed(1)} GB / ${(systemMetrics.memory_total_mb / 1024).toFixed(1)} GB (${systemMetrics.memory_usage_pct.toFixed(0)}%)`}
                   >
                     <Activity className="w-3 h-3 animate-pulse" />
@@ -560,8 +557,8 @@ export const App: React.FC = () => {
                   {broadcastMode === 'private_first'
                     ? '🔒 MARA Slipstream (Private Miner)'
                     : broadcastMode === 'manual'
-                    ? '📁 Manual (Offline Signed Hex)'
-                    : rpcUrl.replace(/^https?:\/\//i, '')}
+                      ? '📁 Manual (Offline Signed Hex)'
+                      : rpcUrl.replace(/^https?:\/\//i, '')}
                 </code>
               </div>
             </div>
@@ -584,13 +581,12 @@ export const App: React.FC = () => {
                 <div className="flex items-center justify-between text-slate-400 text-xs mb-1">
                   <div className="flex items-center gap-2">
                     <Cpu
-                      className={`w-4 h-4 ${
-                        (systemMetrics?.cpu_usage_pct || 0) >= 85
+                      className={`w-4 h-4 ${(systemMetrics?.cpu_usage_pct || 0) >= 85
                           ? 'text-rose-400'
                           : (systemMetrics?.cpu_usage_pct || 0) >= 50
-                          ? 'text-amber-400'
-                          : 'text-emerald-400'
-                      }`}
+                            ? 'text-amber-400'
+                            : 'text-emerald-400'
+                        }`}
                     />
                     <span>Realtime CPU Load</span>
                   </div>
@@ -605,8 +601,8 @@ export const App: React.FC = () => {
                       (systemMetrics?.cpu_usage_pct || 0) >= 85
                         ? 'text-rose-400'
                         : (systemMetrics?.cpu_usage_pct || 0) >= 50
-                        ? 'text-amber-400'
-                        : 'text-emerald-400'
+                          ? 'text-amber-400'
+                          : 'text-emerald-400'
                     }
                   >
                     {systemMetrics ? `${systemMetrics.cpu_usage_pct.toFixed(1)}%` : '0.0%'}
@@ -618,13 +614,12 @@ export const App: React.FC = () => {
                 {/* Mini Live Load Meter */}
                 <div className="w-full bg-slate-800/80 rounded-full h-1.5 mt-2 overflow-hidden">
                   <div
-                    className={`h-full rounded-full transition-all duration-700 ease-out ${
-                      (systemMetrics?.cpu_usage_pct || 0) >= 85
+                    className={`h-full rounded-full transition-all duration-700 ease-out ${(systemMetrics?.cpu_usage_pct || 0) >= 85
                         ? 'bg-rose-500'
                         : (systemMetrics?.cpu_usage_pct || 0) >= 50
-                        ? 'bg-amber-500'
-                        : 'bg-emerald-400'
-                    }`}
+                          ? 'bg-amber-500'
+                          : 'bg-emerald-400'
+                      }`}
                     style={{ width: `${Math.min(100, Math.max(0, systemMetrics?.cpu_usage_pct || 0))}%` }}
                   />
                 </div>
@@ -690,20 +685,18 @@ export const App: React.FC = () => {
                 <div className="flex items-center gap-2 flex-wrap">
                   <button
                     onClick={() => setPubkeyFilter('all')}
-                    className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-2 ${
-                      pubkeyFilter === 'all'
+                    className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-2 ${pubkeyFilter === 'all'
                         ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
                         : 'bg-slate-900/80 hover:bg-slate-800 text-slate-400 hover:text-slate-200 border border-slate-800'
-                    }`}
+                      }`}
                   >
                     <Layers className="w-3.5 h-3.5" />
                     <span>Semua Puzzle</span>
                     <span
-                      className={`text-[10px] px-1.5 py-0.2 rounded-md ${
-                        pubkeyFilter === 'all'
+                      className={`text-[10px] px-1.5 py-0.2 rounded-md ${pubkeyFilter === 'all'
                           ? 'bg-slate-950/20 text-slate-950 font-mono'
                           : 'bg-slate-800 text-slate-400 font-mono'
-                      }`}
+                        }`}
                     >
                       {puzzles.length}
                     </span>
@@ -712,23 +705,21 @@ export const App: React.FC = () => {
                   {/* Tab: Sedang Berjalan (Running) */}
                   <button
                     onClick={() => setPubkeyFilter('running')}
-                    className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-2 ${
-                      pubkeyFilter === 'running'
+                    className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-2 ${pubkeyFilter === 'running'
                         ? 'bg-rose-500 text-white shadow-md shadow-rose-500/30'
                         : 'bg-slate-900/80 hover:bg-slate-800 text-slate-400 hover:text-slate-200 border border-slate-800'
-                    }`}
+                      }`}
                     title="Tampilkan hanya puzzle yang sedang aktif running / pausing"
                   >
                     <Flame className={`w-3.5 h-3.5 ${pubkeyFilter === 'running' ? 'text-orange-200' : 'text-orange-400'}`} />
                     <span>Sedang Berjalan</span>
                     <span
-                      className={`text-[10px] px-1.5 py-0.2 rounded-md font-mono flex items-center gap-1 ${
-                        pubkeyFilter === 'running'
+                      className={`text-[10px] px-1.5 py-0.2 rounded-md font-mono flex items-center gap-1 ${pubkeyFilter === 'running'
                           ? 'bg-rose-700/60 text-white'
                           : countRunning > 0
-                          ? 'bg-rose-500/15 text-rose-400 border border-rose-500/30'
-                          : 'bg-slate-800 text-slate-500'
-                      }`}
+                            ? 'bg-rose-500/15 text-rose-400 border border-rose-500/30'
+                            : 'bg-slate-800 text-slate-500'
+                        }`}
                     >
                       {countRunning > 0 && pubkeyFilter !== 'running' && (
                         <span className="w-1.5 h-1.5 rounded-full bg-rose-400 animate-ping inline-block" />
@@ -739,20 +730,18 @@ export const App: React.FC = () => {
 
                   <button
                     onClick={() => setPubkeyFilter('with_pubkey')}
-                    className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-2 ${
-                      pubkeyFilter === 'with_pubkey'
+                    className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-2 ${pubkeyFilter === 'with_pubkey'
                         ? 'bg-purple-500 text-white shadow-md shadow-purple-500/20'
                         : 'bg-slate-900/80 hover:bg-slate-800 text-slate-400 hover:text-slate-200 border border-slate-800'
-                    }`}
+                      }`}
                   >
                     <Zap className="w-3.5 h-3.5 text-purple-300" />
                     <span>Pubkey Ada (Kangaroo O(√N))</span>
                     <span
-                      className={`text-[10px] px-1.5 py-0.2 rounded-md font-mono ${
-                        pubkeyFilter === 'with_pubkey'
+                      className={`text-[10px] px-1.5 py-0.2 rounded-md font-mono ${pubkeyFilter === 'with_pubkey'
                           ? 'bg-purple-700/60 text-white'
                           : 'bg-purple-500/10 text-purple-400 border border-purple-500/20'
-                      }`}
+                        }`}
                     >
                       {countWithPubkey}
                     </span>
@@ -760,20 +749,18 @@ export const App: React.FC = () => {
 
                   <button
                     onClick={() => setPubkeyFilter('no_pubkey')}
-                    className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-2 ${
-                      pubkeyFilter === 'no_pubkey'
+                    className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-2 ${pubkeyFilter === 'no_pubkey'
                         ? 'bg-blue-500 text-white shadow-md shadow-blue-500/20'
                         : 'bg-slate-900/80 hover:bg-slate-800 text-slate-400 hover:text-slate-200 border border-slate-800'
-                    }`}
+                      }`}
                   >
                     <Search className="w-3.5 h-3.5 text-blue-300" />
                     <span>Pubkey Belum Ada (Address Mode)</span>
                     <span
-                      className={`text-[10px] px-1.5 py-0.2 rounded-md font-mono ${
-                        pubkeyFilter === 'no_pubkey'
+                      className={`text-[10px] px-1.5 py-0.2 rounded-md font-mono ${pubkeyFilter === 'no_pubkey'
                           ? 'bg-blue-700/60 text-white'
                           : 'bg-blue-500/10 text-blue-400 border border-blue-500/20'
-                      }`}
+                        }`}
                     >
                       {countNoPubkey}
                     </span>
@@ -784,11 +771,10 @@ export const App: React.FC = () => {
                 <div className="flex items-center gap-1 bg-slate-900/90 border border-slate-800 p-1 rounded-xl">
                   <button
                     onClick={() => handleViewModeChange('grid')}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition ${
-                      viewMode === 'grid'
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition ${viewMode === 'grid'
                         ? 'bg-amber-500 text-slate-950 font-bold shadow'
                         : 'text-slate-400 hover:text-white'
-                    }`}
+                      }`}
                     title="Tampilan Grid Kartu"
                   >
                     <LayoutGrid className="w-3.5 h-3.5" />
@@ -796,11 +782,10 @@ export const App: React.FC = () => {
                   </button>
                   <button
                     onClick={() => handleViewModeChange('table')}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition ${
-                      viewMode === 'table'
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition ${viewMode === 'table'
                         ? 'bg-amber-500 text-slate-950 font-bold shadow'
                         : 'text-slate-400 hover:text-white'
-                    }`}
+                      }`}
                     title="Tampilan Tabel List"
                   >
                     <List className="w-3.5 h-3.5" />
@@ -918,158 +903,157 @@ export const App: React.FC = () => {
                   </div>
                 )}
                 <div className="bg-slate-900/50 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs font-mono">
-                    <thead className="bg-slate-950/90 text-slate-400 border-b border-slate-800 text-[11px] uppercase tracking-wider font-sans">
-                      <tr>
-                        <th className="py-3 px-4"># Puzzle</th>
-                        <th className="py-3 px-3">Status</th>
-                        <th className="py-3 px-3">Metode & Algoritma</th>
-                        <th className="py-3 px-3">Bitcoin Address</th>
-                        <th className="py-3 px-3">Hadiah (BTC)</th>
-                        <th className="py-3 px-3">Range Target (HEX)</th>
-                        <th className="py-3 px-4 text-right">Aksi</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-800/60 text-slate-300">
-                      {filteredPuzzles.map((p) => {
-                        const h = hunters[p.puzzle_number];
-                        const isRunning = h?.status === 'Running';
-                        const isSolved = p.is_solved || h?.status === 'SolvedByUs' || h?.status === 'SolvedByOther';
-                        const hasPubkey = Boolean(p.pubkey_hex && p.pubkey_hex.trim().length === 66);
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs font-mono">
+                      <thead className="bg-slate-950/90 text-slate-400 border-b border-slate-800 text-[11px] uppercase tracking-wider font-sans">
+                        <tr>
+                          <th className="py-3 px-4"># Puzzle</th>
+                          <th className="py-3 px-3">Status</th>
+                          <th className="py-3 px-3">Metode & Algoritma</th>
+                          <th className="py-3 px-3">Bitcoin Address</th>
+                          <th className="py-3 px-3">Hadiah (BTC)</th>
+                          <th className="py-3 px-3">Range Target (HEX)</th>
+                          <th className="py-3 px-4 text-right">Aksi</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/60 text-slate-300">
+                        {filteredPuzzles.map((p) => {
+                          const h = hunters[p.puzzle_number];
+                          const isRunning = h?.status === 'Running';
+                          const isSolved = p.is_solved || h?.status === 'SolvedByUs' || h?.status === 'SolvedByOther';
+                          const hasPubkey = Boolean(p.pubkey_hex && p.pubkey_hex.trim().length === 66);
 
-                        return (
-                          <tr
-                            key={p.puzzle_number}
-                            onClick={() => setSelectedPuzzleNumber(p.puzzle_number)}
-                            className={`hover:bg-slate-800/50 transition-colors cursor-pointer group ${
-                              isRunning ? 'bg-amber-500/5' : ''
-                            }`}
-                          >
-                            {/* # Puzzle & Bits */}
-                            <td className="py-3 px-4">
-                              <div className="flex items-center gap-2">
-                                <span className="font-sans font-black text-sm text-white group-hover:text-amber-400 transition-colors">
-                                  #{p.puzzle_number}
-                                </span>
-                                <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-800 text-slate-300 border border-slate-700">
-                                  {p.bits}-bit
-                                </span>
-                              </div>
-                            </td>
-
-                            {/* Status */}
-                            <td className="py-3 px-3 font-sans">
-                              {isSolved ? (
-                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 inline-flex items-center gap-1">
-                                  <CheckCircle className="w-3 h-3" /> SOLVED
-                                </span>
-                              ) : isRunning ? (
-                                <div className="space-y-0.5">
-                                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-400 border border-amber-500/30 inline-flex items-center gap-1 animate-pulse">
-                                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
-                                    RUNNING
+                          return (
+                            <tr
+                              key={p.puzzle_number}
+                              onClick={() => setSelectedPuzzleNumber(p.puzzle_number)}
+                              className={`hover:bg-slate-800/50 transition-colors cursor-pointer group ${isRunning ? 'bg-amber-500/5' : ''
+                                }`}
+                            >
+                              {/* # Puzzle & Bits */}
+                              <td className="py-3 px-4">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-sans font-black text-sm text-white group-hover:text-amber-400 transition-colors">
+                                    #{p.puzzle_number}
                                   </span>
-                                  {h?.keys_per_second ? (
-                                    <div className="text-[10px] text-amber-400 font-mono font-semibold">
-                                      {formatKeysSpeed(h.keys_per_second)}
+                                  <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-800 text-slate-300 border border-slate-700">
+                                    {p.bits}-bit
+                                  </span>
+                                </div>
+                              </td>
+
+                              {/* Status */}
+                              <td className="py-3 px-3 font-sans">
+                                {isSolved ? (
+                                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 inline-flex items-center gap-1">
+                                    <CheckCircle className="w-3 h-3" /> SOLVED
+                                  </span>
+                                ) : isRunning ? (
+                                  <div className="space-y-0.5">
+                                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-400 border border-amber-500/30 inline-flex items-center gap-1 animate-pulse">
+                                      <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
+                                      RUNNING
+                                    </span>
+                                    {h?.keys_per_second ? (
+                                      <div className="text-[10px] text-amber-400 font-mono font-semibold">
+                                        {formatKeysSpeed(h.keys_per_second)}
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                ) : (
+                                  <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-800 text-slate-400">
+                                    IDLE
+                                  </span>
+                                )}
+                              </td>
+
+                              {/* Metode & Public Key */}
+                              <td className="py-3 px-3 font-sans">
+                                {hasPubkey ? (
+                                  <div className="space-y-0.5">
+                                    <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-purple-500/15 text-purple-300 border border-purple-500/30 inline-flex items-center gap-1">
+                                      <Zap className="w-3 h-3 text-purple-400" />
+                                      <span>Kangaroo O(√N)</span>
+                                    </span>
+                                    <div className="text-[10px] font-mono text-slate-400 truncate max-w-[140px]" title={p.pubkey_hex}>
+                                      {p.pubkey_hex.slice(0, 10)}...{p.pubkey_hex.slice(-6)}
                                     </div>
-                                  ) : null}
+                                  </div>
+                                ) : (
+                                  <div className="space-y-0.5">
+                                    <span className="px-2 py-0.5 rounded-md text-[10px] font-medium bg-blue-500/10 text-blue-400 border border-blue-500/20 inline-flex items-center gap-1">
+                                      <Search className="w-3 h-3" />
+                                      <span>Address Hash160</span>
+                                    </span>
+                                    <div className="text-[10px] text-slate-500 italic">
+                                      Pubkey belum terekspos
+                                    </div>
+                                  </div>
+                                )}
+                              </td>
+
+                              {/* Target Address */}
+                              <td className="py-3 px-3">
+                                <div className="flex items-center gap-1.5">
+                                  <span className="text-slate-200 text-xs font-mono">{p.address}</span>
+                                  <button
+                                    onClick={(e) => handleCopyAddr(e, p.id, p.address)}
+                                    className="text-slate-500 hover:text-white p-1 rounded transition"
+                                    title="Salin Alamat"
+                                  >
+                                    {copiedAddressId === p.id ? (
+                                      <Check className="w-3.5 h-3.5 text-emerald-400" />
+                                    ) : (
+                                      <Copy className="w-3.5 h-3.5" />
+                                    )}
+                                  </button>
+                                  <a
+                                    href={`https://www.blockchain.com/explorer/addresses/btc/${p.address}`}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="text-slate-500 hover:text-amber-400 p-1 transition"
+                                    title="Buka di Blockchain Explorer"
+                                  >
+                                    <ExternalLink className="w-3.5 h-3.5" />
+                                  </a>
                                 </div>
-                              ) : (
-                                <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-800 text-slate-400">
-                                  IDLE
+                              </td>
+
+                              {/* Hadiah (BTC) */}
+                              <td className="py-3 px-3 font-sans">
+                                <span className="font-extrabold text-amber-400 font-mono text-xs">
+                                  {p.reward_btc > 0 ? `${p.reward_btc.toFixed(2)} BTC` : 'TBA'}
                                 </span>
-                              )}
-                            </td>
+                              </td>
 
-                            {/* Metode & Public Key */}
-                            <td className="py-3 px-3 font-sans">
-                              {hasPubkey ? (
-                                <div className="space-y-0.5">
-                                  <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-purple-500/15 text-purple-300 border border-purple-500/30 inline-flex items-center gap-1">
-                                    <Zap className="w-3 h-3 text-purple-400" />
-                                    <span>Kangaroo O(√N)</span>
-                                  </span>
-                                  <div className="text-[10px] font-mono text-slate-400 truncate max-w-[140px]" title={p.pubkey_hex}>
-                                    {p.pubkey_hex.slice(0, 10)}...{p.pubkey_hex.slice(-6)}
-                                  </div>
+                              {/* Range Target (HEX) */}
+                              <td className="py-3 px-3 text-[11px] text-slate-400 font-mono">
+                                <div className="truncate max-w-[160px]" title={`${p.range_start_hex} .. ${p.range_end_hex}`}>
+                                  {p.range_start_hex.slice(0, 8)}...{p.range_end_hex.slice(-6)}
                                 </div>
-                              ) : (
-                                <div className="space-y-0.5">
-                                  <span className="px-2 py-0.5 rounded-md text-[10px] font-medium bg-blue-500/10 text-blue-400 border border-blue-500/20 inline-flex items-center gap-1">
-                                    <Search className="w-3 h-3" />
-                                    <span>Address Hash160</span>
-                                  </span>
-                                  <div className="text-[10px] text-slate-500 italic">
-                                    Pubkey belum terekspos
-                                  </div>
-                                </div>
-                              )}
-                            </td>
+                              </td>
 
-                            {/* Target Address */}
-                            <td className="py-3 px-3">
-                              <div className="flex items-center gap-1.5">
-                                <span className="text-slate-200 text-xs font-mono">{p.address}</span>
+                              {/* Aksi */}
+                              <td className="py-3 px-4 text-right">
                                 <button
-                                  onClick={(e) => handleCopyAddr(e, p.id, p.address)}
-                                  className="text-slate-500 hover:text-white p-1 rounded transition"
-                                  title="Salin Alamat"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedPuzzleNumber(p.puzzle_number);
+                                  }}
+                                  className="px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500 text-amber-400 hover:text-slate-950 font-sans font-bold text-xs rounded-lg border border-amber-500/30 transition inline-flex items-center gap-1 shadow-sm"
                                 >
-                                  {copiedAddressId === p.id ? (
-                                    <Check className="w-3.5 h-3.5 text-emerald-400" />
-                                  ) : (
-                                    <Copy className="w-3.5 h-3.5" />
-                                  )}
+                                  <span>Detail</span>
+                                  <ChevronRight className="w-3.5 h-3.5" />
                                 </button>
-                                <a
-                                  href={`https://www.blockchain.com/explorer/addresses/btc/${p.address}`}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  onClick={(e) => e.stopPropagation()}
-                                  className="text-slate-500 hover:text-amber-400 p-1 transition"
-                                  title="Buka di Blockchain Explorer"
-                                >
-                                  <ExternalLink className="w-3.5 h-3.5" />
-                                </a>
-                              </div>
-                            </td>
-
-                            {/* Hadiah (BTC) */}
-                            <td className="py-3 px-3 font-sans">
-                              <span className="font-extrabold text-amber-400 font-mono text-xs">
-                                {p.reward_btc > 0 ? `${p.reward_btc.toFixed(2)} BTC` : 'TBA'}
-                              </span>
-                            </td>
-
-                            {/* Range Target (HEX) */}
-                            <td className="py-3 px-3 text-[11px] text-slate-400 font-mono">
-                              <div className="truncate max-w-[160px]" title={`${p.range_start_hex} .. ${p.range_end_hex}`}>
-                                {p.range_start_hex.slice(0, 8)}...{p.range_end_hex.slice(-6)}
-                              </div>
-                            </td>
-
-                            {/* Aksi */}
-                            <td className="py-3 px-4 text-right">
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setSelectedPuzzleNumber(p.puzzle_number);
-                                }}
-                                className="px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500 text-amber-400 hover:text-slate-950 font-sans font-bold text-xs rounded-lg border border-amber-500/30 transition inline-flex items-center gap-1 shadow-sm"
-                              >
-                                <span>Detail</span>
-                                <ChevronRight className="w-3.5 h-3.5" />
-                              </button>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
-              </div>
               </div>
             )}
           </>
@@ -1077,44 +1061,64 @@ export const App: React.FC = () => {
       </main>
 
       {/* Footer */}
-      <footer className="border-t border-slate-900 bg-slate-950/60 py-4 text-center text-xs text-slate-500 flex items-center justify-center gap-2">
-        <img src="/logo.svg" alt="Puzzle Hunt" className="w-4 h-4 opacity-60" />
-        <span>Bitcoin Puzzle Hunter Engine &copy; 2026 — Rust Axum + PostgreSQL + Tokio + CUDA</span>
-      </footer>
+        <footer className="border-t border-slate-900 bg-slate-950/60 py-5 text-center text-xs text-slate-500">
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-2 sm:gap-4 flex-wrap">
+            <span className="flex items-center gap-1.5">
+              <img src="/logo.svg" alt="Puzzle Hunt" className="w-4 h-4 opacity-60" />
+              <span>Bitcoin Puzzle Hunter Engine &copy; 2026 — Rust Axum + PostgreSQL + Tokio + CUDA</span>
+            </span>
+            <span className="text-slate-700 hidden sm:inline">•</span>
+            {/* Donasi BTC */}
+            <span
+              className="flex items-center gap-1.5 group cursor-pointer"
+              onClick={() => {
+                navigator.clipboard.writeText('bc1qz08nklntedluzzr9w0g3qhxrkvytayentqdshc');
+              }}
+              title="Klik untuk salin alamat donasi Bitcoin"
+            >
+              <span className="text-amber-500 font-mono">₿</span>
+              <span className="text-slate-500 group-hover:text-amber-400 transition">Donasi BTC:</span>
+              <code className="font-mono text-amber-400/80 group-hover:text-amber-300 transition text-[11px] bg-amber-500/5 px-1.5 py-0.5 rounded border border-amber-500/10 group-hover:border-amber-500/30">
+                bc1qz08nklntedl...entqdshc
+              </code>
+              <Copy className="w-3 h-3 text-slate-600 group-hover:text-amber-400 transition" />
+            </span>
+          </div>
+        </footer>
 
-      {/* Modals */}
-      <AddPuzzleModal
-        isOpen={isAddModalOpen}
-        onClose={() => setIsAddModalOpen(false)}
-        onAdded={refreshAll}
-      />
-      <FoundKeysModal
-        isOpen={isFoundModalOpen}
-        onClose={() => setIsFoundModalOpen(false)}
-        keys={foundKeys}
-      />
-      <TelegramModal
-        isOpen={isTelegramModalOpen}
-        onClose={() => setIsTelegramModalOpen(false)}
-      />
-      <MaraSweepModal
-        isOpen={isMaraSweepOpen}
-        onClose={() => setIsMaraSweepOpen(false)}
-        destinationAddress={destinationAddress}
-        onSuccess={() => {
-          refreshAll();
-          fetchFoundKeys();
-        }}
-      />
-      {activeCelebrationPuzzle !== null && (
-        <CelebrationModal
-          isOpen={isCelebrationModalOpen}
-          onClose={() => setIsCelebrationModalOpen(false)}
-          puzzleNumber={activeCelebrationPuzzle}
-          events={timelineEvents[activeCelebrationPuzzle] || []}
-          destinationAddress={destinationAddress}
+        {/* Modals */}
+        <AddPuzzleModal
+          isOpen={isAddModalOpen}
+          onClose={() => setIsAddModalOpen(false)}
+          onAdded={refreshAll}
         />
-      )}
+        <FoundKeysModal
+          isOpen={isFoundModalOpen}
+          onClose={() => setIsFoundModalOpen(false)}
+          keys={foundKeys}
+        />
+        <TelegramModal
+          isOpen={isTelegramModalOpen}
+          onClose={() => setIsTelegramModalOpen(false)}
+        />
+        <MaraSweepModal
+          isOpen={isMaraSweepOpen}
+          onClose={() => setIsMaraSweepOpen(false)}
+          destinationAddress={destinationAddress}
+          onSuccess={() => {
+            refreshAll();
+            fetchFoundKeys();
+          }}
+        />
+        {activeCelebrationPuzzle !== null && (
+          <CelebrationModal
+            isOpen={isCelebrationModalOpen}
+            onClose={() => setIsCelebrationModalOpen(false)}
+            puzzleNumber={activeCelebrationPuzzle}
+            events={timelineEvents[activeCelebrationPuzzle] || []}
+            destinationAddress={destinationAddress}
+          />
+        )}
     </div>
   );
 };

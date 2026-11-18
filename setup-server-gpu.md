@@ -69,7 +69,7 @@ Membuka jalur aman dari port 3001 server ke domain publik tanpa perlu port-forwa
 
 ```bash
 mkdir -p logs
-service cloudflared start || nohup cloudflared tunnel run --token eyJhIjoiNTBhN2ViYWU2M2ZkYTc0YWE1Y2IzNmIzZjc1MmM2MTMiLCJ0IjoiMTE4Y2Y5ZjctMjQwNy00YjU4LWIzOGYtNmUwYWNhODE4MTg4IiwicyI6IlpqUXhZV1poWWpjdFpqVTRNUzAwT1RkbUxUZ3dNMkV0WlRBMll6STVPR1kzTkdZeSJ9 > logs/cloudflared.log 2>&1 &
+service cloudflared start || nohup cloudflared tunnel run --token <token> > logs/cloudflared.log 2>&1 &
 ```
 > **Keterangan:**
 > - Mengarahkan lalu lintas dari `https://gpu-engine-one.bariscode.my.id` langsung ke `localhost:3001`.

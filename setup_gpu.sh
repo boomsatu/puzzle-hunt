@@ -42,13 +42,9 @@ if command -v sudo &>/dev/null; then
     SUDO="sudo"
 fi
 
-export DEBIAN_FRONTEND=noninteractive
-
 if command -v apt-get &>/dev/null; then
-    echo "📦 [1/2] Memperbarui repositori paket Ubuntu (apt update)..."
-    $SUDO apt-get update
-    echo "📦 [2/2] Memasang paket sistem (build-essential, gmp, ssl, postgresql)..."
-    $SUDO apt-get install -y \
+    $SUDO apt-get update -qq
+    $SUDO apt-get install -y -qq \
         build-essential libgmp-dev libssl-dev pkg-config git curl wget screen \
         postgresql postgresql-contrib
 elif command -v yum &>/dev/null; then
@@ -61,14 +57,11 @@ echo -e "\n${CYAN}━━━ [3/6] Memeriksa Rust Compiler ━━━${NC}"
 if ! command -v cargo &>/dev/null; then
     echo "🦀 Mengunduh dan memasang Rust toolchain (stable)..."
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
-    source "$HOME/.cargo/env" 2>/dev/null || true
-    [ -f "/root/.cargo/env" ] && source "/root/.cargo/env" 2>/dev/null || true
+    source "$HOME/.cargo/env"
 else
     echo -e "${GREEN}✅ Rust sudah terpasang: $(rustc --version)${NC}"
 fi
 source "$HOME/.cargo/env" 2>/dev/null || true
-[ -f "/root/.cargo/env" ] && source "/root/.cargo/env" 2>/dev/null || true
-export PATH="$HOME/.cargo/bin:/root/.cargo/bin:$PATH"
 
 # ── 4. Konfigurasi Environment (.env) ───────────────────────────────────────
 echo -e "\n${CYAN}━━━ [4/6] Konfigurasi Environment (.env) ━━━${NC}"
@@ -92,7 +85,6 @@ echo -e "${GREEN}✅ .env berhasil dikonfigurasi untuk GPU hosting (HUNT_MODE=gp
 # ── 5. Setup Database PostgreSQL & Migrasi Data ─────────────────────────────
 echo -e "\n${CYAN}━━━ [5/6] Setup PostgreSQL & Migrasi Data ━━━${NC}"
 if command -v docker &>/dev/null && docker ps &>/dev/null; then
-    echo "🐳 Menyalakan database PostgreSQL via Docker..."
     docker compose up -d postgres
     echo "⏳ Menunggu container PostgreSQL siap..."
     sleep 4
@@ -102,7 +94,6 @@ if command -v docker &>/dev/null && docker ps &>/dev/null; then
     until docker exec puzzle_postgres pg_isready -U postgres -d puzzle_hunt &>/dev/null || [ $COUNT -ge $MAX_RETRIES ]; do
         sleep 2
         COUNT=$((COUNT+1))
-        echo "   Menunggu database siap ($COUNT/$MAX_RETRIES)..."
     done
 
     # Cek apakah ada file backup lokal yang dibawa user
@@ -120,12 +111,9 @@ if command -v docker &>/dev/null && docker ps &>/dev/null; then
 else
     echo -e "${YELLOW}ℹ️ Menyiapkan PostgreSQL Native di host...${NC}"
     $SUDO service postgresql start || true
-    echo "🔑 Mengatur password user postgres..."
     $SUDO -u postgres psql -c "ALTER USER postgres PASSWORD 'postgrespassword';" 2>/dev/null || true
-    echo "📁 Membuat database puzzle_hunt..."
     $SUDO -u postgres createdb -O postgres puzzle_hunt 2>/dev/null || true
     if [ -f "data/seed_unsolved.sql" ]; then
-        echo "🌱 Mengisi dataset awal (seed_unsolved.sql)..."
         $SUDO -u postgres psql -d puzzle_hunt < "data/seed_unsolved.sql" > /dev/null 2>&1 || true
     fi
     echo -e "${GREEN}✅ PostgreSQL (Native) siap & running di port 5432.${NC}"
@@ -133,7 +121,7 @@ fi
 
 # ── 6. Kompilasi Release Rust Backend ───────────────────────────────────────
 echo -e "\n${CYAN}━━━ [6/6] Kompilasi Rust Backend (Release Binary) ━━━${NC}"
-echo "🦀 Mengompilasi puzzle-hunt release mode (proses butuh 1-2 menit)..."
+echo "🦀 Mengompilasi puzzle-hunt release mode..."
 cargo build --release --bin puzzle-hunt
 echo -e "${GREEN}✅ Binary backend berhasil dibuat: target/release/puzzle-hunt${NC}"
 

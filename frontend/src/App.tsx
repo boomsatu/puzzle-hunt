@@ -392,8 +392,8 @@ export const App: React.FC = () => {
 
       {/* Navbar Header */}
       <header className="border-b border-slate-800/80 bg-slate-900/40 backdrop-blur-md sticky top-0 z-30">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 flex flex-col sm:flex-row items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
+        <div className="max-w-7xl mx-auto px-3 sm:px-6 py-2.5 sm:py-3.5 flex flex-col md:flex-row items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5 sm:gap-3 w-full md:w-auto justify-between md:justify-start">
             <div
               className="relative group cursor-pointer shrink-0"
               onClick={() => setSelectedPuzzleNumber(null)}
@@ -402,21 +402,22 @@ export const App: React.FC = () => {
               <img
                 src="/logo.svg"
                 alt="Puzzle Hunter Logo"
-                className="w-11 h-11 rounded-2xl shadow-lg shadow-amber-500/20 group-hover:scale-105 transition-all duration-200"
+                className="w-10 h-10 sm:w-11 sm:h-11 rounded-2xl shadow-lg shadow-amber-500/20 group-hover:scale-105 transition-all duration-200"
               />
               <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-emerald-400 border-2 border-slate-950 rounded-full animate-pulse" title="Engine Online"></span>
             </div>
             <div>
-              <div className="flex items-center gap-2">
-                <h1 className="font-extrabold text-xl tracking-tight text-white">
-                  PUZZLE HUNT <span className="text-amber-400 font-mono text-sm px-1.5 py-0.5 bg-amber-400/10 rounded">RUST+PG</span>
+              <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+                <h1 className="font-extrabold text-lg sm:text-xl tracking-tight text-white flex items-center gap-1.5">
+                  <span>PUZZLE HUNT</span>
+                  <span className="text-amber-400 font-mono text-xs px-1.5 py-0.5 bg-amber-400/10 rounded">RUST+PG</span>
                 </h1>
-                <span className="flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-medium">
+                <span className="flex items-center gap-1 text-[10px] sm:text-[11px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-medium">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></span>
                   Online
                 </span>
                 <span
-                  className={`flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full font-medium border transition ${
+                  className={`flex items-center gap-1.5 text-[10px] sm:text-[11px] px-2 py-0.5 rounded-full font-medium border transition ${
                     wsConnected
                       ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
                       : 'bg-amber-500/10 text-amber-400 border-amber-500/20'
@@ -431,10 +432,10 @@ export const App: React.FC = () => {
                   <span>{wsConnected ? 'WSS Live' : 'WSS Reconnecting'}</span>
                 </span>
 
-                {/* Real-time CPU Load Badge di Navbar */}
+                {/* Real-time CPU Load Badge di Navbar (tampil di layar besar xl+) */}
                 {systemMetrics && (
                   <span
-                    className={`hidden sm:flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full font-medium border transition ${
+                    className={`hidden xl:flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full font-medium border transition ${
                       systemMetrics.cpu_usage_pct >= 85
                         ? 'bg-rose-500/10 text-rose-400 border-rose-500/20'
                         : systemMetrics.cpu_usage_pct >= 50
@@ -449,39 +450,43 @@ export const App: React.FC = () => {
                   </span>
                 )}
               </div>
-              <p className="text-xs text-slate-400">
+              <p className="text-xs text-slate-400 hidden xl:block">
                 Pollard's Kangaroo O(√N) Controller & PostgreSQL Database
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2.5 w-full sm:w-auto justify-end">
+          <div className="flex items-center gap-1.5 sm:gap-2 w-full md:w-auto justify-end flex-wrap">
             <button
               onClick={() => setIsTelegramModalOpen(true)}
-              className="px-3.5 py-2 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/30 rounded-xl text-xs font-semibold flex items-center gap-2 transition"
+              className="px-2.5 sm:px-3 py-1.5 sm:py-2 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/30 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition shrink-0"
               title="Konfigurasi & Test Notifikasi Telegram"
             >
-              <Bot className="w-4 h-4" />
-              <span>Telegram Alert</span>
+              <Bot className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+              <span className="hidden xl:inline">Telegram </span>
+              <span>Alert</span>
             </button>
 
             <button
               onClick={() => setIsMaraSweepOpen(true)}
-              className="px-3.5 py-2 bg-orange-500/10 hover:bg-orange-500/20 text-orange-400 border border-orange-500/30 rounded-xl text-xs font-semibold flex items-center gap-2 transition"
+              className="px-2.5 sm:px-3 py-1.5 sm:py-2 bg-orange-500/10 hover:bg-orange-500/20 text-orange-400 border border-orange-500/30 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition shrink-0"
               title="Manual & Saved Key MARA Slipstream Sweep"
             >
-              <Zap className="w-4 h-4 text-orange-400" />
-              <span>MARA Sweep</span>
+              <Zap className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-orange-400 shrink-0" />
+              <span>MARA</span>
+              <span className="hidden xl:inline"> Sweep</span>
             </button>
 
             <button
               onClick={() => setIsFoundModalOpen(true)}
-              className="px-3.5 py-2 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-xl text-xs font-semibold flex items-center gap-2 transition"
+              className="px-2.5 sm:px-3 py-1.5 sm:py-2 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition shrink-0"
+              title="Kunci Ditemukan & Riwayat"
             >
-              <Key className="w-4 h-4" />
-              <span>Found Keys</span>
+              <Key className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+              <span className="hidden xl:inline">Found </span>
+              <span>Keys</span>
               {foundKeys.length > 0 && (
-                <span className="px-1.5 py-0.2 bg-emerald-500 text-slate-950 font-bold rounded-full text-[10px]">
+                <span className="px-1.5 py-0.2 bg-emerald-500 text-slate-950 font-bold rounded-full text-[10px] ml-0.5">
                   {foundKeys.length}
                 </span>
               )}
@@ -489,20 +494,22 @@ export const App: React.FC = () => {
 
             <button
               onClick={() => setIsAddModalOpen(true)}
-              className="px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-md shadow-amber-500/10 transition"
+              className="px-3 sm:px-3.5 py-1.5 sm:py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-md shadow-amber-500/10 transition shrink-0"
+              title="Tambah Bitcoin Puzzle Baru"
             >
-              <Plus className="w-4 h-4" />
-              <span>Tambah Puzzle</span>
+              <Plus className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+              <span className="hidden sm:inline">Tambah </span>
+              <span>Puzzle</span>
             </button>
 
             {/* Tombol Logout Admin */}
             <button
               onClick={handleLogout}
-              className="px-3 py-2 bg-slate-800/80 hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 border border-slate-700/60 hover:border-rose-500/30 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition"
+              className="px-2.5 sm:px-3 py-1.5 sm:py-2 bg-slate-800/80 hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 border border-slate-700/60 hover:border-rose-500/30 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition shrink-0"
               title={`Sesi aktif sebagai: ${getAuthUser()} — Klik untuk keluar`}
             >
-              <LogOut className="w-4 h-4" />
-              <span className="hidden sm:inline">Keluar</span>
+              <LogOut className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+              <span className="hidden lg:inline">Keluar</span>
             </button>
           </div>
         </div>

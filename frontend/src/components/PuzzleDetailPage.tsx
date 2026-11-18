@@ -252,40 +252,41 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
   return (
     <div className="space-y-6 pb-12 animate-in fade-in duration-200">
       {/* Top Navigation Bar */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-4 border-b border-slate-800">
-        <div className="flex items-center gap-3">
+      <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-3 pb-4 border-b border-slate-800">
+        <div className="flex items-center gap-2.5 sm:gap-3 flex-wrap">
           <button
             onClick={onBack}
-            className="p-2 bg-slate-900 border border-slate-800 hover:border-slate-700 text-slate-300 rounded-xl flex items-center gap-2 text-xs font-semibold transition"
+            className="px-2.5 sm:px-3 py-1.5 sm:py-2 bg-slate-900 border border-slate-800 hover:border-slate-700 text-slate-300 rounded-xl flex items-center gap-1.5 text-xs font-semibold transition shrink-0"
+            title="Kembali ke Dashboard Utama"
           >
-            <ArrowLeft className="w-4 h-4" />
-            <span>Kembali</span>
+            <ArrowLeft className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+            <span className="hidden sm:inline">Kembali</span>
           </button>
 
           <div>
-            <div className="flex items-center gap-2">
-              <h2 className="text-2xl font-black text-white tracking-tight">
+            <div className="flex items-center gap-2 flex-wrap">
+              <h2 className="text-xl sm:text-2xl font-black text-white tracking-tight shrink-0">
                 Bitcoin Puzzle #{puzzle.puzzle_number}
               </h2>
-              <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-slate-800 text-slate-300 border border-slate-700">
+              <span className="px-2 sm:px-2.5 py-0.5 rounded-full text-xs font-bold bg-slate-800 text-slate-300 border border-slate-700 shrink-0">
                 {puzzle.bits}-bit
               </span>
               {isSolved ? (
-                <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
+                <span className="px-2 sm:px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center gap-1 shrink-0">
                   <CheckCircle className="w-3.5 h-3.5" /> SOLVED
                 </span>
               ) : isPausing ? (
-                <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 flex items-center gap-1.5 animate-pulse">
+                <span className="px-2 sm:px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 flex items-center gap-1.5 animate-pulse shrink-0">
                   <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400" />
                   <span>MENJEDA... (Menyimpan Riwayat Window)</span>
                 </span>
               ) : isRunning ? (
-                <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center gap-1.5 animate-pulse">
+                <span className="px-2 sm:px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center gap-1.5 animate-pulse shrink-0">
                   <span className="w-2 h-2 rounded-full bg-amber-400"></span>
                   RUNNING
                 </span>
               ) : (
-                <span className="px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-800/80 text-slate-400">
+                <span className="px-2 sm:px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-800/80 text-slate-400 shrink-0">
                   {hunter?.status === 'Paused' ? 'PAUSED' : 'IDLE'}
                 </span>
               )}
@@ -297,13 +298,13 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
         </div>
 
         {/* Action Button */}
-        <div className="flex items-center gap-3 w-full sm:w-auto">
+        <div className="flex items-center gap-2 flex-wrap w-full md:w-auto justify-start md:justify-end">
           {!isRunning && !isPausing && (
             <select
               value={windowBits}
               onChange={(e) => setWindowBits(Number(e.target.value))}
               disabled={isSolved || loading || isPausing}
-              className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-300 focus:outline-none focus:border-amber-500"
+              className="bg-slate-900 border border-slate-800 rounded-xl px-2.5 sm:px-3 py-1.5 sm:py-2 text-xs text-slate-300 focus:outline-none focus:border-amber-500 shrink-0"
             >
               <option value={20}>Window 2^20 (1 Juta keys)</option>
               <option value={24}>Window 2^24 (16 Juta keys)</option>
@@ -316,7 +317,7 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
           {isPausing ? (
             <button
               disabled
-              className="px-5 py-2.5 bg-amber-500/15 text-amber-300 border border-amber-500/30 rounded-xl font-bold text-xs flex items-center gap-2 cursor-wait"
+              className="px-3.5 sm:px-5 py-2 sm:py-2.5 bg-amber-500/15 text-amber-300 border border-amber-500/30 rounded-xl font-bold text-xs flex items-center gap-2 cursor-wait shrink-0"
               title="Smart Pause sedang aktif: worker sedang menyelesaikan window aktif dan menyimpan riwayat ke database"
             >
               <Loader2 className="w-4 h-4 animate-spin text-amber-400" />
@@ -326,20 +327,21 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
             <button
               onClick={handleStop}
               disabled={loading}
-              className="px-5 py-2.5 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 rounded-xl font-bold text-xs flex items-center gap-2 transition"
+              className="px-3.5 sm:px-4 py-2 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 rounded-xl font-bold text-xs flex items-center gap-1.5 sm:gap-2 transition shrink-0"
               title="Jeda Cerdas (Smart Pause): Menunggu worker menyelesaikan window aktif dan menyimpan riwayat ke PostgreSQL sebelum berhenti"
             >
-              <Square className="w-4 h-4 fill-current" />
+              <Square className="w-3.5 h-3.5 sm:w-4 sm:h-4 fill-current" />
               <span>Jeda Hunter</span>
             </button>
           ) : (
             <button
               onClick={() => setIsStartModalOpen(true)}
               disabled={isSolved || loading}
-              className="px-6 py-2.5 bg-gradient-to-r from-amber-500 to-amber-400 hover:from-amber-400 hover:to-amber-300 text-slate-950 font-bold rounded-xl text-xs flex items-center gap-2 shadow-lg shadow-amber-500/10 transition disabled:opacity-40"
+              className="px-4 sm:px-5 py-2 bg-gradient-to-r from-amber-500 to-amber-400 hover:from-amber-400 hover:to-amber-300 text-slate-950 font-bold rounded-xl text-xs flex items-center gap-1.5 sm:gap-2 shadow-lg shadow-amber-500/10 transition disabled:opacity-40 shrink-0"
             >
-              <Play className="w-4 h-4 fill-current" />
-              <span>Mulai Hunt (Pilih GPU / CPU)</span>
+              <Play className="w-3.5 h-3.5 sm:w-4 sm:h-4 fill-current" />
+              <span className="hidden sm:inline">Mulai Hunt (Pilih GPU / CPU)</span>
+              <span className="sm:hidden">Mulai Hunt</span>
             </button>
           )}
 
@@ -347,11 +349,12 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
           <button
             onClick={handleSimulateCelebration}
             disabled={simulating}
-            className="px-3.5 py-2.5 bg-gradient-to-r from-amber-500/15 via-emerald-500/15 to-emerald-500/20 hover:from-amber-500/25 hover:to-emerald-500/30 text-amber-300 border border-amber-500/30 rounded-xl font-bold text-xs flex items-center gap-1.5 transition disabled:opacity-50"
+            className="px-3 sm:px-3.5 py-2 bg-gradient-to-r from-amber-500/15 via-emerald-500/15 to-emerald-500/20 hover:from-amber-500/25 hover:to-emerald-500/30 text-amber-300 border border-amber-500/30 rounded-xl font-bold text-xs flex items-center gap-1.5 transition disabled:opacity-50 shrink-0"
             title="Uji coba animasi perayaan kemenangan dan timeline auto-transfer realtime"
           >
             <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-            <span>{simulating ? 'Menyiarkan...' : 'Simulasi Victory'}</span>
+            <span className="hidden sm:inline">{simulating ? 'Menyiarkan...' : 'Simulasi Victory'}</span>
+            <span className="sm:hidden">{simulating ? 'Simulasi...' : 'Simulasi'}</span>
           </button>
         </div>
       </div>
@@ -920,9 +923,19 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
                     ))}
                   </div>
 
-                  {/* Marker Pinpoint yang menyentuh titik lokasi jump masing-masing core / stream */}
+                  {/* Marker Pinpoint yang menyentuh titik lokasi jump masing-masing core / stream
+                      Jika banyak core (> 8), badge label disembunyikan dan hanya tampil saat hover
+                      agar tidak menumpuk di tampilan split-screen / narrow */}
                   {coresList.map((core, idx) => {
                     const isAlt = idx % 2 === 1;
+                    // Jika core banyak (>8), rotasi badge 3-tingkat agar tidak bertabrakan
+                    const altLevel = coresList.length > 8
+                      ? (idx % 3 === 0 ? '-top-9' : idx % 3 === 1 ? '-top-6' : '-top-12')
+                      : (isAlt ? '-top-6' : '-top-8');
+                    // Badge teks disembunyikan default jika core banyak, tampil hanya saat hover
+                    const badgeVisibility = coresList.length > 8
+                      ? 'opacity-0 group-hover:opacity-100 group-hover:z-30'
+                      : 'opacity-100';
                     return (
                       <div
                         key={`pinpoint-${core.coreId}`}
@@ -930,9 +943,9 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
                         style={{ left: `${Math.max(1.5, Math.min(98.5, core.progress.startPct))}%` }}
                         title={isGpuMode ? `CUDA Stream #${core.coreId}: ${core.progress.startFormatted} (${core.startHex})` : `Core #${core.coreId}: ${core.progress.startFormatted} (${core.startHex})`}
                       >
-                        {/* Badge nomor core & persentase jump di atas pin */}
+                        {/* Badge nomor core & persentase — tersembunyi saat banyak core, tampil saat hover */}
                         <div
-                          className={`absolute ${isAlt ? '-top-6' : '-top-8'} transition-transform group-hover:scale-110 px-1.5 py-0.5 rounded-md bg-slate-950/95 border text-[9px] font-mono font-bold whitespace-nowrap shadow-md shadow-black/80 flex items-center gap-1 z-20 pointer-events-none ${isGpuMode
+                          className={`absolute ${altLevel} transition-all duration-200 group-hover:scale-110 px-1.5 py-0.5 rounded-md bg-slate-950/95 border text-[9px] font-mono font-bold whitespace-nowrap shadow-md shadow-black/80 flex items-center gap-1 pointer-events-none ${badgeVisibility} ${isGpuMode
                             ? 'border-purple-500/60 text-purple-300 shadow-purple-950/40'
                             : 'border-amber-500/50 text-amber-300'
                             }`}
@@ -941,7 +954,7 @@ export const PuzzleDetailPage: React.FC<PuzzleDetailPageProps> = ({
                           <span>{isGpuMode ? `S${core.coreId}` : `C${core.coreId}`}: {core.progress.startFormatted}</span>
                         </div>
 
-                        {/* Animasi Ping & Glowing Dot */}
+                        {/* Animasi Ping & Glowing Dot — selalu terlihat */}
                         <div className="relative flex items-center justify-center">
                           <span
                             className={`absolute w-5 h-5 rounded-full animate-ping ${isGpuMode ? 'bg-purple-400/35' : 'bg-amber-400/35'

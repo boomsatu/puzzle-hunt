@@ -48,7 +48,7 @@ import { AnimatedBackground } from './components/AnimatedBackground';
 import { LoginPage } from './components/LoginPage';
 import { verifyCurrentToken, clearAuthToken, getAuthToken, getAuthUser, getApiBaseUrl } from './auth';
 
-export type PubkeyFilter = 'all' | 'with_pubkey' | 'no_pubkey';
+export type PubkeyFilter = 'all' | 'running' | 'with_pubkey' | 'no_pubkey';
 export type ViewMode = 'grid' | 'table';
 
 export const App: React.FC = () => {
@@ -333,12 +333,17 @@ export const App: React.FC = () => {
   const countNoPubkey = puzzles.filter(
     (p) => !p.pubkey_hex || p.pubkey_hex.trim().length !== 66
   ).length;
+  const countRunning = Object.values(hunters).filter((h) => h.status === 'Running' || h.status === 'Pausing').length;
 
   // Filter puzzle berdasarkan tab pubkey dan search query
   const filteredPuzzles = puzzles.filter((p) => {
     const hasPub = Boolean(p.pubkey_hex && p.pubkey_hex.trim().length === 66);
+    const h = hunters[p.puzzle_number];
+    const isActivelyRunning = h?.status === 'Running' || h?.status === 'Pausing';
+
     if (pubkeyFilter === 'with_pubkey' && !hasPub) return false;
     if (pubkeyFilter === 'no_pubkey' && hasPub) return false;
+    if (pubkeyFilter === 'running' && !isActivelyRunning) return false;
 
     const q = searchQuery.toLowerCase().trim();
     if (!q) return true;
@@ -704,6 +709,34 @@ export const App: React.FC = () => {
                     </span>
                   </button>
 
+                  {/* Tab: Sedang Berjalan (Running) */}
+                  <button
+                    onClick={() => setPubkeyFilter('running')}
+                    className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-2 ${
+                      pubkeyFilter === 'running'
+                        ? 'bg-rose-500 text-white shadow-md shadow-rose-500/30'
+                        : 'bg-slate-900/80 hover:bg-slate-800 text-slate-400 hover:text-slate-200 border border-slate-800'
+                    }`}
+                    title="Tampilkan hanya puzzle yang sedang aktif running / pausing"
+                  >
+                    <Flame className={`w-3.5 h-3.5 ${pubkeyFilter === 'running' ? 'text-orange-200' : 'text-orange-400'}`} />
+                    <span>Sedang Berjalan</span>
+                    <span
+                      className={`text-[10px] px-1.5 py-0.2 rounded-md font-mono flex items-center gap-1 ${
+                        pubkeyFilter === 'running'
+                          ? 'bg-rose-700/60 text-white'
+                          : countRunning > 0
+                          ? 'bg-rose-500/15 text-rose-400 border border-rose-500/30'
+                          : 'bg-slate-800 text-slate-500'
+                      }`}
+                    >
+                      {countRunning > 0 && pubkeyFilter !== 'running' && (
+                        <span className="w-1.5 h-1.5 rounded-full bg-rose-400 animate-ping inline-block" />
+                      )}
+                      {countRunning}
+                    </span>
+                  </button>
+
                   <button
                     onClick={() => setPubkeyFilter('with_pubkey')}
                     className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-2 ${
@@ -813,29 +846,78 @@ export const App: React.FC = () => {
             {/* Konten Puzzles (Grid vs Table List) */}
             {filteredPuzzles.length === 0 ? (
               <div className="text-center py-20 bg-slate-900/20 border border-slate-800/50 rounded-2xl">
-                <ShieldAlert className="w-12 h-12 text-slate-600 mx-auto mb-3" />
-                <h3 className="text-base font-semibold text-slate-300">Tidak ada puzzle yang cocok</h3>
-                <p className="text-xs text-slate-500 mt-1">
-                  Coba ubah kata kunci pencarian atau ganti tab filter kategori puzzle di atas.
-                </p>
+                {pubkeyFilter === 'running' ? (
+                  <>
+                    <Flame className="w-12 h-12 text-slate-600 mx-auto mb-3" />
+                    <h3 className="text-base font-semibold text-slate-300">Tidak ada hunter yang sedang berjalan</h3>
+                    <p className="text-xs text-slate-500 mt-1">
+                      Belum ada puzzle aktif saat ini. Buka puzzle dari tab <strong className="text-amber-400">Semua Puzzle</strong> dan klik <strong className="text-amber-400">Mulai Hunt</strong>.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <ShieldAlert className="w-12 h-12 text-slate-600 mx-auto mb-3" />
+                    <h3 className="text-base font-semibold text-slate-300">Tidak ada puzzle yang cocok</h3>
+                    <p className="text-xs text-slate-500 mt-1">
+                      Coba ubah kata kunci pencarian atau ganti tab filter kategori puzzle di atas.
+                    </p>
+                  </>
+                )}
               </div>
             ) : viewMode === 'grid' ? (
               /* ===== MODE TAMPILAN GRID ===== */
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-                {filteredPuzzles.map((p) => (
-                  <PuzzleCard
-                    key={p.puzzle_number}
-                    puzzle={p}
-                    hunter={hunters[p.puzzle_number]}
-                    destinationAddress={destinationAddress}
-                    onSelect={() => setSelectedPuzzleNumber(p.puzzle_number)}
-                    onRefresh={refreshAll}
-                  />
-                ))}
+              <div className="space-y-4">
+                {/* Banner ringkasan jika tab running aktif */}
+                {pubkeyFilter === 'running' && filteredPuzzles.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-3 p-3 bg-gradient-to-r from-rose-950/40 via-slate-900/80 to-orange-950/30 border border-rose-500/30 rounded-2xl shadow-md shadow-rose-950/20">
+                    <span className="flex items-center gap-1.5 text-xs font-bold text-rose-300">
+                      <Flame className="w-4 h-4 text-orange-400 animate-pulse" />
+                      {filteredPuzzles.length} Hunter Aktif
+                    </span>
+                    <span className="text-slate-600">•</span>
+                    <span className="text-xs text-slate-300 font-mono font-semibold">
+                      Total Speed: <strong className="text-amber-400">{totalSpeed > 0 ? formatKeysSpeed(totalSpeed) : '—'}</strong>
+                    </span>
+                    <span className="text-slate-600">•</span>
+                    <span className="text-xs text-slate-400">
+                      Update real-time via WebSocket{wsConnected ? <span className="text-emerald-400 ml-1">● Live</span> : <span className="text-amber-400 ml-1">◌ Polling</span>}
+                    </span>
+                  </div>
+                )}
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                  {filteredPuzzles.map((p) => (
+                    <PuzzleCard
+                      key={p.puzzle_number}
+                      puzzle={p}
+                      hunter={hunters[p.puzzle_number]}
+                      destinationAddress={destinationAddress}
+                      onSelect={() => setSelectedPuzzleNumber(p.puzzle_number)}
+                      onRefresh={refreshAll}
+                    />
+                  ))}
+                </div>
               </div>
             ) : (
               /* ===== MODE TAMPILAN TABEL LIST ===== */
-              <div className="bg-slate-900/50 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
+              <div className="space-y-3">
+                {/* Banner ringkasan jika tab running aktif */}
+                {pubkeyFilter === 'running' && filteredPuzzles.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-3 p-3 bg-gradient-to-r from-rose-950/40 via-slate-900/80 to-orange-950/30 border border-rose-500/30 rounded-2xl shadow-md shadow-rose-950/20">
+                    <span className="flex items-center gap-1.5 text-xs font-bold text-rose-300">
+                      <Flame className="w-4 h-4 text-orange-400 animate-pulse" />
+                      {filteredPuzzles.length} Hunter Aktif
+                    </span>
+                    <span className="text-slate-600">•</span>
+                    <span className="text-xs text-slate-300 font-mono font-semibold">
+                      Total Speed: <strong className="text-amber-400">{totalSpeed > 0 ? formatKeysSpeed(totalSpeed) : '—'}</strong>
+                    </span>
+                    <span className="text-slate-600">•</span>
+                    <span className="text-xs text-slate-400">
+                      Update real-time via WebSocket{wsConnected ? <span className="text-emerald-400 ml-1">● Live</span> : <span className="text-amber-400 ml-1">◌ Polling</span>}
+                    </span>
+                  </div>
+                )}
+                <div className="bg-slate-900/50 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-xs font-mono">
                     <thead className="bg-slate-950/90 text-slate-400 border-b border-slate-800 text-[11px] uppercase tracking-wider font-sans">
@@ -987,6 +1069,7 @@ export const App: React.FC = () => {
                     </tbody>
                   </table>
                 </div>
+              </div>
               </div>
             )}
           </>

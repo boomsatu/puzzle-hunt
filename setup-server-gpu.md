@@ -77,15 +77,20 @@ service cloudflared start || nohup cloudflared tunnel run --token eyJhIjoiNTBhN2
 
 ---
 
-### 6. Aktifkan Auto-Backup Filebase S3 Daemon (Setiap Hari Pukul 22.00 WIB)
-Menjalankan daemon otomatis di background untuk mengekspor database secara rutin dan mengunggahnya ke Filebase Cloud Storage.
+### 6. Aktifkan Auto-Backup Filebase S3 Daemon (22.00 WIB + Heartbeat Telegram Tiap 30 Menit)
+Menjalankan daemon otomatis di background untuk mengekspor database secara rutin ke Filebase Cloud Storage, sekaligus mengirimkan notifikasi detak jantung (*Heartbeat*) ke Telegram setiap 30 menit.
 
 ```bash
+# Jalankan daemon background (Backup harian 22.00 WIB + Heartbeat Telegram 30 Menit)
 python3 auto_backup_filebase.py --start
+
+# (Opsional) Uji coba kirim Heartbeat ke Telegram sekarang juga:
+python3 auto_backup_filebase.py --heartbeat
 ```
 > **Keterangan:**
-> - Berjalan sebagai background daemon mandiri (Unix double-forking).
+> - Berjalan sebagai background daemon mandiri (Unix double-forking — aman tutup terminal SSH).
 > - Otomatis mengekspor database dan mengompresi menjadi `.sql.gz` setiap pukul 22.00 WIB (UTC+7).
+> - **Heartbeat Telegram:** Mengirim status runtime hunter, kesehatan PostgreSQL, dan utilisasi GPU setiap 30 menit via Cloudflare Worker Proxy yang ada di `.env`.
 > - Untuk memeriksa status daemon: `python3 auto_backup_filebase.py --status`.
 
 ---
@@ -131,3 +136,46 @@ Setelah backend aktif, buka dashboard Anda di browser dan atur perburuan:
    - Window: `30-bit`
    - *Throughput:* **~4.30 Miliar keys/detik**
 3. **Total Kecepatan Simultan:** **🔥 9.44 Miliar keys/detik stabil tanpa saturasi bus PCIe!**
+
+```
+> **Keterangan:**
+> - Proses backend berjalan via `nohup` dan menyimpan nomor PID ke `.backend.pid`.
+> - **Aman menutup terminal SSH atau mematikan laptop tanpa menghentikan perburuan**.
+
+---
+
+## 📊 Cheatsheet Pemantauan & Operasional Harian
+
+| Tugas | Perintah Terminal |
+|---|---|
+| **Pantau Log Perburuan Real-time** | `tail -f logs/backend.log` |
+| **Pantau Suhu & Utilisasi GPU (NVIDIA)** | `nvtop` *(atau `watch -n 1 nvidia-smi`)* |
+| **Pantau Beban CPU & RAM** | `htop` |
+| **Hentikan Sistem dengan Aman (Graceful Pause)** | `bash stop.sh` |
+| **Cek Status Cloudflare Tunnel** | `ps aux \| grep cloudflared` |
+| **Cek Status Daemon Backup Filebase** | `python3 auto_backup_filebase.py --status` |
+| **Jalankan Backup Database Manual Instan** | `python3 auto_backup_filebase.py --now` |
+
+---
+
+## 🎯 Golden Setup di Dashboard Web (Sweet Spot 9.44 B keys/s)
+
+Setelah backend aktif, buka dashboard Anda di browser dan atur perburuan:
+
+1. **Puzzle #71 (Mode Address / Tanpa Pubkey)**:
+   - Klik **Start Hunt** $\rightarrow$ Pilih Mode **GPU Acceleration**.
+   - Workers: `32`
+   - Window: `32-bit`
+   - *Throughput:* **~5.14 Miliar keys/detik**
+2. **Puzzle #140 (Mode Kangaroo / Exposed Pubkey)**:
+   - Klik **Start Hunt** $\rightarrow$ Pilih Mode **CPU High-Performance**.
+   - Workers: `8`
+   - Window: `30-bit`
+   - *Throughput:* **~4.30 Miliar keys/detik**
+3. **Total Kecepatan Simultan:** **🔥 9.44 Miliar keys/detik stabil tanpa saturasi bus PCIe!**
+
+## Jalankan auto backup database
+python3 auto_backup_filebase.py --start
+
+## Cek log
+tail -f logs/backend.log

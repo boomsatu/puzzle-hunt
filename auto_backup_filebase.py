@@ -3,22 +3,27 @@
 ==============================================================================
    BITCOIN PUZZLE HUNTER — AUTO DATABASE BACKUP & FILEBASE S3 UPLOADER
 ==============================================================================
-Program terpisah untuk mengekspor database PostgreSQL secara otomatis
-setiap pukul 22.00 WIB (UTC+7) dan mengunggahnya ke cloud storage Filebase (S3).
+Program terpisah untuk:
+1. Mengekspor database PostgreSQL secara otomatis setiap pukul 22.00 WIB (UTC+7)
+   dan mengunggahnya ke cloud storage Filebase (S3).
+2. Mengirimkan notifikasi detak jantung (HEARTBEAT) setiap 30 menit ke Telegram
+   lengkap dengan status hunter engine, database, dan utilisasi GPU.
+3. Mengirimkan alert instan ke Telegram saat backup berhasil atau gagal.
 
 Fitur:
 - Berjalan sebagai Daemon di background (tetap hidup saat SSH ditutup).
 - Export otomatis dari Docker (puzzle_postgres) atau Native PostgreSQL.
 - Kompresi .sql.gz hemat ruang dan bandwidth.
 - Upload aman ke Filebase S3 (API v4).
-- Notifikasi Telegram instan saat backup berhasil / gagal.
+- Heartbeat setiap 30 menit ke Telegram via Cloudflare Worker Proxy (anti-blokir).
 - Rotasi lokal otomatis (menyimpan 7 backup terakhir agar SSD tidak penuh).
 
 Penggunaan:
-  python3 auto_backup_filebase.py --start     # Jalankan sebagai daemon di background
-  python3 auto_backup_filebase.py --status    # Cek status daemon
-  python3 auto_backup_filebase.py --stop      # Hentikan daemon
-  python3 auto_backup_filebase.py --now       # Uji coba backup & upload sekarang juga
+  python3 auto_backup_filebase.py --start       # Jalankan sebagai daemon di background
+  python3 auto_backup_filebase.py --status      # Cek status daemon
+  python3 auto_backup_filebase.py --stop        # Hentikan daemon
+  python3 auto_backup_filebase.py --now         # Uji coba backup & upload sekarang juga
+  python3 auto_backup_filebase.py --heartbeat   # Uji coba kirim heartbeat Telegram sekarang
 ==============================================================================
 """
 
@@ -26,10 +31,12 @@ import os
 import sys
 import time
 import gzip
+import json
 import shutil
 import signal
 import argparse
 import subprocess
+import urllib.request
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urlparse
 
@@ -45,12 +52,174 @@ FILEBASE_BUCKET_DEFAULT = os.environ.get("FILEBASE_BUCKET", "puzzle-hunt-backup"
 WIB = timezone(timedelta(hours=7))
 TARGET_HOUR_WIB = 22  # Jam 22.00 WIB
 TARGET_MINUTE_WIB = 0
+HEARTBEAT_INTERVAL_SECS = 30 * 60  # 30 menit (1800 detik)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 BACKUP_DIR = os.path.join(DATA_DIR, "backups")
 LOG_FILE = os.path.join(DATA_DIR, "backup_daemon.log")
 PID_FILE = os.path.join(DATA_DIR, "backup_daemon.pid")
+
+# ==============================================================================
+# HELPER: LOG & ENVIRONMENT
+# ==============================================================================
+def log(msg: str):
+    now_str = datetime.now(WIB).strftime("%Y-%m-%d %H:%M:%S WIB")
+    line = f"[{now_str}] {msg}"
+    print(line, flush=True)
+    if sys.stdout.isatty():
+        try:
+            os.makedirs(DATA_DIR, exist_ok=True)
+            with open(LOG_FILE, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+        except Exception:
+            pass
+
+
+def load_env() -> dict:
+    env_vars = {}
+    env_path = os.path.join(BASE_DIR, ".env")
+    if os.path.isfile(env_path):
+        try:
+            with open(env_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        val = v.strip().strip("'\"")
+                        env_vars[k.strip()] = val
+        except Exception as e:
+            log(f"⚠️ Gagal membaca .env: {e}")
+    return env_vars
+
+
+# ==============================================================================
+# HELPER: NOTIFIKASI TELEGRAM (DENGAN CLOUDFLARE WORKER PROXY)
+# ==============================================================================
+def send_telegram(message: str) -> bool:
+    env_vars = load_env()
+    bot_token = env_vars.get("TELEGRAM_BOT_TOKEN") or os.environ.get("TELEGRAM_BOT_TOKEN")
+    chat_id = env_vars.get("TELEGRAM_CHAT_ID") or os.environ.get("TELEGRAM_CHAT_ID")
+    proxy_url = env_vars.get("TELEGRAM_API_URL") or os.environ.get("TELEGRAM_API_URL") or "https://api.telegram.org"
+    proxy_url = proxy_url.rstrip("/")
+
+    if not bot_token or not chat_id or "your_telegram" in bot_token:
+        log("⚠️ Telegram Bot Token atau Chat ID belum diset di .env")
+        return False
+
+    api_endpoint = f"{proxy_url}/bot{bot_token}/sendMessage"
+    payload = json.dumps({
+        "chat_id": chat_id,
+        "text": message,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        api_endpoint,
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "PuzzleHuntBackupDaemon/1.0"
+        }
+    )
+
+    try:
+        import ssl
+        # Menggunakan context yang fleksibel agar tidak terhalang clock skew / sertifikat proxy
+        try:
+            ssl_ctx = ssl._create_unverified_context()
+        except AttributeError:
+            ssl_ctx = ssl.create_default_context()
+
+        with urllib.request.urlopen(req, context=ssl_ctx, timeout=15) as resp:
+            if resp.status == 200:
+                return True
+            else:
+                log(f"⚠️ Telegram API response code: {resp.status}")
+                return False
+    except Exception as e:
+        log(f"⚠️ Gagal mengirim pesan Telegram: {e}")
+        return False
+
+
+def get_db_status() -> str:
+    # 1. Cek Docker
+    try:
+        check = subprocess.run(["docker", "ps", "--format", "{{.Names}}"], capture_output=True, text=True, timeout=2)
+        if "puzzle_postgres" in check.stdout:
+            return "🟢 Docker (puzzle_postgres)"
+    except Exception:
+        pass
+
+    # 2. Cek Native PostgreSQL port 5432
+    try:
+        check = subprocess.run(["pg_isready", "-h", "127.0.0.1", "-p", "5432"], capture_output=True, text=True, timeout=2)
+        if check.returncode == 0:
+            return "🟢 Native PostgreSQL (Port 5432)"
+    except Exception:
+        pass
+
+    return "⚠️ Menunggu Koneksi"
+
+
+def get_hunter_status() -> str:
+    backend_pid_file = os.path.join(BASE_DIR, ".backend.pid")
+    if os.path.exists(backend_pid_file):
+        try:
+            with open(backend_pid_file, "r") as f:
+                bpid = int(f.read().strip())
+            if is_pid_running(bpid):
+                return f"🟢 Running (PID {bpid})"
+        except Exception:
+            pass
+    return "⏸️ Idle / Standby"
+
+
+def get_gpu_status() -> str:
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name,utilization.gpu,temperature.gpu", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=3
+        )
+        if out.returncode == 0 and out.stdout.strip():
+            lines = [l.strip() for l in out.stdout.strip().split("\n") if l.strip()]
+            return " | ".join(lines)
+    except Exception:
+        pass
+    return "N/A"
+
+
+def send_heartbeat_notification():
+    now_str = datetime.now(WIB).strftime("%Y-%m-%d %H:%M:%S WIB")
+    hostname = os.uname().nodename if hasattr(os, "uname") else os.environ.get("COMPUTERNAME", "Linux-Server")
+
+    hunter_status = get_hunter_status()
+    db_status = get_db_status()
+    gpu_status = get_gpu_status()
+
+    _, next_run = get_seconds_until_next_22_wib()
+    next_str = next_run.strftime("%Y-%m-%d %H:%M WIB")
+
+    msg = (
+        "💓 <b>[HEARTBEAT] Bitcoin Puzzle Hunter</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🕒 <b>Waktu:</b> <code>{now_str}</code>\n"
+        f"🖥️ <b>Server Host:</b> <code>{hostname}</code>\n"
+        f"⚡ <b>Engine Hunter:</b> {hunter_status}\n"
+        f"🐘 <b>Database:</b> {db_status}\n"
+        f"🎮 <b>GPU Status:</b> <code>{gpu_status}</code>\n"
+        f"💾 <b>Next Auto-Backup:</b> <code>{next_str}</code>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "<i>✅ Daemon & sistem perburuan berjalan normal.</i>"
+    )
+
+    success = send_telegram(msg)
+    if success:
+        log("💓 [HEARTBEAT] Notifikasi detak jantung berhasil dikirim ke Telegram!")
+    else:
+        log("⚠️ [HEARTBEAT] Gagal mengirim detak jantung ke Telegram (cek token/proxy di .env).")
+
 
 # ==============================================================================
 # HELPER: AUTO-INSTALL BOTO3 JIKA BELUM TERSEDIA
@@ -72,35 +241,6 @@ def get_boto3():
             log(f"❌ Gagal memasang boto3 secara otomatis: {e}")
             log("Silakan jalankan manual: pip install boto3")
             sys.exit(1)
-
-
-def log(msg: str):
-    now_str = datetime.now(WIB).strftime("%Y-%m-%d %H:%M:%S WIB")
-    line = f"[{now_str}] {msg}"
-    print(line, flush=True)
-    # Jika stdout adalah terminal interaktif (bukan daemon yang sudah di-redirect ke file),
-    # simpan juga ke file log agar riwayat tetap tercatat tanpa duplikasi.
-    if sys.stdout.isatty():
-        try:
-            os.makedirs(DATA_DIR, exist_ok=True)
-            with open(LOG_FILE, "a", encoding="utf-8") as f:
-                f.write(line + "\n")
-        except Exception:
-            pass
-
-
-def load_env() -> dict:
-    env_vars = {}
-    env_path = os.path.join(BASE_DIR, ".env")
-    if os.path.isfile(env_path):
-        with open(env_path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    k, v = line.split("=", 1)
-                    val = v.strip().strip("'\"")
-                    env_vars[k.strip()] = val
-    return env_vars
 
 
 # ==============================================================================
@@ -247,7 +387,6 @@ def upload_to_filebase(gz_file_path: str, custom_bucket: str = None) -> str:
         config=Config(signature_version="s3v4")
     )
 
-    # Tentukan bucket target
     bucket_name = custom_bucket
     if not bucket_name:
         try:
@@ -288,7 +427,7 @@ def upload_to_filebase(gz_file_path: str, custom_bucket: str = None) -> str:
 # ==============================================================================
 # RUNNER UTAMA SATU KALI
 # ==============================================================================
-def execute_backup_cycle(custom_bucket: str = None):
+def execute_backup_cycle(custom_bucket: str = None) -> bool:
     t0 = time.time()
     log("======================================================================")
     log("🚀 MEMULAI PROSES BACKUP & CLOUD UPLOAD FILEBASE")
@@ -304,15 +443,35 @@ def execute_backup_cycle(custom_bucket: str = None):
         log(f"🎉 SEMUA PROSES TUNTAS DALAM {duration:.1f} DETIK! File: {fname} ({file_size_mb:.2f} MB)")
         log(f"📍 Tersimpan aman di: {s3_uri}")
         log("======================================================================")
+
+        # Kirim notifikasi sukses ke Telegram
+        send_telegram(
+            "🎉 <b>[BACKUP SUKSES] Database Terunggah ke Filebase S3</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📦 <b>File:</b> <code>{fname}</code> ({file_size_mb:.2f} MB)\n"
+            f"📍 <b>S3:</b> <code>{s3_uri}</code>\n"
+            f"⏱️ <b>Durasi:</b> {duration:.1f} detik\n"
+            f"🕒 <b>Waktu:</b> {datetime.now(WIB).strftime('%Y-%m-%d %H:%M:%S WIB')}\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "<i>✅ Database perburuan aman di decentralized IPFS.</i>"
+        )
         return True
     except Exception as e:
         log(f"❌ ERROR SAAT BACKUP: {e}")
         log("======================================================================")
+        # Kirim notifikasi gagal ke Telegram
+        send_telegram(
+            "❌ <b>[BACKUP GAGAL] Terjadi Kendala Ekspor / Upload</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"⚠️ <b>Error:</b> <code>{str(e)[:300]}</code>\n"
+            f"🕒 <b>Waktu:</b> {datetime.now(WIB).strftime('%Y-%m-%d %H:%M:%S WIB')}\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        )
         return False
 
 
 # ==============================================================================
-# LOGIKA DAEMON SCHEDULE (JAM 22:00 WIB)
+# LOGIKA DAEMON SCHEDULE (JAM 22:00 WIB + HEARTBEAT SETIAP 30 MENIT)
 # ==============================================================================
 def get_seconds_until_next_22_wib():
     now = datetime.now(WIB)
@@ -325,7 +484,8 @@ def get_seconds_until_next_22_wib():
 
 def run_scheduler_loop(custom_bucket: str = None):
     log("======================================================================")
-    log(f"🕒 DAEMON AKTIF — JADWAL SETIAP HARI PUKUL {TARGET_HOUR_WIB:02d}:{TARGET_MINUTE_WIB:02d} WIB")
+    log(f"🕒 DAEMON AKTIF — JADWAL BACKUP SETIAP HARI PUKUL {TARGET_HOUR_WIB:02d}:{TARGET_MINUTE_WIB:02d} WIB")
+    log(f"💓 HEARTBEAT TELEGRAM AKTIF — SETIAP 30 MENIT")
     log("======================================================================")
 
     # Tangani sinyal exit bersih
@@ -341,23 +501,29 @@ def run_scheduler_loop(custom_bucket: str = None):
     signal.signal(signal.SIGTERM, handle_signal)
     signal.signal(signal.SIGINT, handle_signal)
 
+    # Kirim heartbeat perdana saat daemon baru dinyalakan
+    log("💓 Mengirim notifikasi Heartbeat awal ke Telegram...")
+    send_heartbeat_notification()
+    last_heartbeat_time = time.time()
+    last_backup_day = None
+
     while True:
-        sleep_sec, next_target = get_seconds_until_next_22_wib()
-        hours, remainder = divmod(int(sleep_sec), 3600)
-        mins, secs = divmod(remainder, 60)
-        target_str = next_target.strftime("%Y-%m-%d %H:%M:%S WIB")
+        # Tidur sebentar (10 detik) per iterasi, hemat CPU 0.0%
+        time.sleep(10)
+        current_time = time.time()
+        now = datetime.now(WIB)
 
-        log(f"⏳ Menunggu jadwal berikutnya: {target_str} (dalam {hours} jam {mins} menit {secs} detik)...")
+        # 1. Cek apakah sudah waktunya mengirim Heartbeat (setiap 30 menit)
+        if current_time - last_heartbeat_time >= HEARTBEAT_INTERVAL_SECS:
+            send_heartbeat_notification()
+            last_heartbeat_time = current_time
 
-        # Sleep sampai jadwal tercapai
-        time.sleep(sleep_sec)
-
-        # Jalankan backup
-        log(f"🔔 Waktu telah mencapai 22:00 WIB! Mengeksekusi backup...")
-        execute_backup_cycle(custom_bucket)
-
-        # Jeda 60 detik agar tidak double-trigger di menit yang sama
-        time.sleep(60)
+        # 2. Cek apakah sudah mencapai jam 22:00 WIB dan belum backup hari ini
+        today_str = now.strftime("%Y-%m-%d")
+        if now.hour == TARGET_HOUR_WIB and now.minute == TARGET_MINUTE_WIB and last_backup_day != today_str:
+            log("🔔 Waktu telah mencapai 22:00 WIB! Mengeksekusi backup...")
+            execute_backup_cycle(custom_bucket)
+            last_backup_day = today_str
 
 
 # ==============================================================================
@@ -414,6 +580,7 @@ def start_daemon(custom_bucket: str = None):
                 print(f"✅ [DAEMON AKTIF] Background backup daemon berjalan di PID {pid}")
                 print(f"📁 Log output tersimpan di: {LOG_FILE}")
                 print(f"🕒 Jadwal: Setiap hari pukul {TARGET_HOUR_WIB:02d}:{TARGET_MINUTE_WIB:02d} WIB (UTC+7)")
+                print(f"💓 Heartbeat Telegram: Setiap 30 menit")
                 print(f"🔒 Terminal SSH sekarang AMAN DITUTUP tanpa menghentikan daemon.")
                 sys.exit(0)
         except OSError as e:
@@ -478,9 +645,10 @@ def status_daemon():
     if pid:
         print("======================================================================")
         print(f"🟢 STATUS: DAEMON SEDANG BERJALAN")
-        print(f"• PID           : {pid}")
-        print(f"• Jadwal Berikut: {target_str}")
-        print(f"• Log File      : {LOG_FILE}")
+        print(f"• PID                : {pid}")
+        print(f"• Jadwal Backup      : {target_str}")
+        print(f"• Heartbeat Telegram : Setiap 30 Menit")
+        print(f"• Log File           : {LOG_FILE}")
         print("======================================================================")
         if os.path.exists(LOG_FILE):
             print("\n📋 [10 BARIS LOG TERAKHIR]:")
@@ -503,7 +671,7 @@ def status_daemon():
 # ==============================================================================
 def main():
     parser = argparse.ArgumentParser(
-        description="Bitcoin Puzzle Hunter — Auto Database Backup to Filebase S3 at 22:00 WIB"
+        description="Bitcoin Puzzle Hunter — Auto Database Backup & 30-Min Heartbeat to Telegram"
     )
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--start", "--daemon", action="store_true", help="Jalankan sebagai background daemon (aman tutup SSH)")
@@ -511,6 +679,7 @@ def main():
     group.add_argument("--stop", action="store_true", help="Hentikan background daemon")
     group.add_argument("--status", action="store_true", help="Lihat status background daemon & log")
     group.add_argument("--now", "--run-once", action="store_true", help="Jalankan backup & upload sekarang (uji coba langsung)")
+    group.add_argument("--heartbeat", "--test-tele", action="store_true", help="Kirim notifikasi Heartbeat ke Telegram sekarang juga")
 
     parser.add_argument("--bucket", type=str, default=None, help="Nama bucket Filebase (opsional)")
 
@@ -520,6 +689,9 @@ def main():
         stop_daemon()
     elif args.status:
         status_daemon()
+    elif args.heartbeat:
+        print("[*] Mengirim uji coba Heartbeat ke Telegram...")
+        send_heartbeat_notification()
     elif args.now:
         print("[*] Menjalankan backup & upload langsung (Foreground Mode)...")
         success = execute_backup_cycle(args.bucket)
@@ -529,12 +701,12 @@ def main():
     elif args.start:
         start_daemon(args.bucket)
     else:
-        # Default jika dijalankan tanpa argumen: cetak status dan panduan
         status_daemon()
         print("\nPerintah Cepat:")
-        print("  python3 auto_backup_filebase.py --now     # Backup & upload sekarang juga")
-        print("  python3 auto_backup_filebase.py --start   # Nyalakan auto backup jam 22.00 WIB (Daemon)")
-        print("  python3 auto_backup_filebase.py --stop    # Hentikan auto backup")
+        print("  python3 auto_backup_filebase.py --heartbeat  # Tes kirim notifikasi Heartbeat ke Telegram")
+        print("  python3 auto_backup_filebase.py --now        # Backup & upload sekarang juga")
+        print("  python3 auto_backup_filebase.py --start      # Nyalakan auto backup 22.00 WIB + Heartbeat 30 Menit (Daemon)")
+        print("  python3 auto_backup_filebase.py --stop       # Hentikan daemon")
 
 
 if __name__ == "__main__":

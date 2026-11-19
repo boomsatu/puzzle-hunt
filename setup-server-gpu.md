@@ -40,7 +40,7 @@ bash build_solver.sh
 Mengunduh dan merestore cadangan database terakhir langsung dari jaringan Filebase IPFS ke PostgreSQL server baru agar riwayat pemindaian tidak mengulang dari nol (*anti-duplikasi permanen*).
 
 ```bash
-bash import_db.sh "https://spotty-brown-marten.myfilebase.com/ipfs/QmS5Z32JWKTtwWpg6Tx6znD8nXaEodi496fH9BpKR37BB5"
+bash import_db.sh "https://spotty-brown-marten.myfilebase.com/ipfs/QmT4v47NNQY1gGKi1LQ3s3yEENn2kcK916WXtjWk5BG4wZ"
 ```
 > **Keterangan:**
 > - Script akan mengunduh file `.sql.gz`, mengekstrak, mengimpor ke PostgreSQL, dan menampilkan verifikasi jumlah data puzzle serta riwayat *scanned windows* yang berhasil diisi.
